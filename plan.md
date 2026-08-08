@@ -26,21 +26,21 @@ Support legend: ✅ Full · 🟡 Partial (works, with a caveat noted) · ❌ Not
 
 Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update this column as work
 lands; it tracks **implementation progress**, separate from the support-level columns above
-which describe **design intent**. As of this version of the plan, nothing has been built yet,
-so every row is ⬜.
+which describe **design intent**. As of this revision: issue #1 (`from_url`) is done,
+and issues #2–6 are in progress for the SQLite leg (the only live connection so far).
 
-**Progress summary: 0 / 28 features implemented (0%).**
+**Progress summary: 1 / 28 features implemented (4%).**
 
 ### 1.1 Connection management
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 1 | `Database.from_url(url: str) -> Database` | Factory: parses a connection string, returns the correct adapter instance, unconnected. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 2 | `async def connect(self) -> None` | Opens the underlying pool/client. Idempotent — calling twice is a no-op. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 4 | `async def ping(self) -> bool` | Cheap round-trip health check. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params. | ✅ | ✅ | 🟡 SQLite has no real pool (single-writer file), so `pool_size` is accepted but ignored with a logged warning. | ⬜ Not started |
+| 1 | `Database.from_url(url: str) -> Database` | Factory: parses a connection string, returns the correct adapter instance, unconnected. | ✅ | ✅ | ✅ | ✅ Done |
+| 2 | `async def connect(self) -> None` | Opens the underlying pool/client. Idempotent — calling twice is a no-op. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 4 | `async def ping(self) -> bool` | Cheap round-trip health check. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params. | ✅ | ✅ | 🟡 SQLite has no real pool (single-writer file), so `pool_size` is accepted but ignored with a logged warning. | 🔨 In progress |
 
 ### 1.2 Create
 
@@ -402,12 +402,13 @@ polydb/
 │       ├── test_mongo_only.py          # e.g. native aggregation pipelines
 │       └── test_sql_family_only.py     # e.g. SQLite REGEXP function registration
 ├── docs/
+│   ├── connection.md                 # connection URLs, adapter resolution, tuning knobs
 │   ├── dsl_spec.md
 │   ├── supported_operations_matrix.md
 │   └── migration_guide.md
 └── examples/
     ├── basic_crud.py
-    ├── switching_backends.py           # same script, 3 different connection strings
+    ├── switching_backends.py           # one script resolves 3–4 different connection strings
     └── transactions.py
 ```
 

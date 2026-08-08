@@ -6,34 +6,30 @@ from polydb.base import BaseAdapter
 from polydb.exceptions import InvalidConnectionStringError
 from polydb.url_parser import ConnectionConfig, parse_connection_string
 
-# Build order (planning doc §6): SQLite leg of the SQL family adapter first,
-# then Postgres, then Mongo, then the MySQL leg. Entries below are added as
-# each adapter actually lands — nothing is pre-registered speculatively.
-_NOT_YET_BUILT: dict[str, str] = {
-    "postgres": "PostgresAdapter (build order step 3 — not started)",
-    "mongo": "MongoAdapter (build order step 4 — not started)",
-}
-_NOT_YET_BUILT_DIALECT: dict[str, str] = {
-    "mysql": "SqlAdapter's MySQL leg (build order step 5 — not started)",
-}
-
 
 def _build_adapter(config: ConnectionConfig) -> BaseAdapter:
+    """Resolve a parsed connection string to the correct adapter class.
+
+    Adapters are imported lazily inside this function so importing polydb never
+    pulls in a driver (asyncpg/motor/aiosqlite/asyncmy) unless you actually use
+    that backend. Every supported scheme resolves to an *unconnected* instance —
+    ``connect()`` is what opens the pool/client (and, for the not-yet-built
+    build-order steps, currently raises ``NotImplementedError``).
+    """
     if config.family == "sql":
-        if config.dialect in _NOT_YET_BUILT_DIALECT:
-            raise NotImplementedError(
-                f"{_NOT_YET_BUILT_DIALECT[config.dialect]} for scheme "
-                f"{config.scheme!r}. See planning doc §6."
-            )
         from polydb.adapters.sql.base import SqlAdapter
 
         return SqlAdapter(config)
 
-    if config.family in _NOT_YET_BUILT:
-        raise NotImplementedError(
-            f"{_NOT_YET_BUILT[config.family]} for scheme {config.scheme!r}. "
-            f"See planning doc §6."
-        )
+    if config.family == "postgres":
+        from polydb.adapters.postgres import PostgresAdapter
+
+        return PostgresAdapter(config)
+
+    if config.family == "mongo":
+        from polydb.adapters.mongo import MongoAdapter
+
+        return MongoAdapter(config)
 
     # Should be unreachable — url_parser only ever produces known families.
     raise InvalidConnectionStringError(f"No adapter registered for family {config.family!r}")
@@ -61,13 +57,14 @@ class Database:
                 or ``"mysql://user:pass@host:3306/db"``.
 
         Returns:
-            A ``Database`` wrapping the resolved adapter. Call ``await db.connect()``
-            (or use ``async with``) before issuing any other calls.
+            A ``Database`` wrapping the resolved adapter — always *unconnected*.
+            Call ``await db.connect()`` (or use ``async with``) before issuing
+            any other calls. Backends whose build step hasn't landed yet return
+            their adapter instance all the same, but ``connect()`` raises
+            ``NotImplementedError`` (see planning doc §6, build order).
 
         Raises:
             InvalidConnectionStringError: Unparseable or unrecognized scheme.
-            NotImplementedError: The scheme is recognized but that adapter
-                hasn't been built yet (see planning doc §6, build order).
         """
         config = parse_connection_string(url)
         adapter = _build_adapter(config)
