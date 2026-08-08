@@ -1,6 +1,12 @@
 # polydb
 
+[![PyPI](https://img.shields.io/pypi/v/polydb)](https://pypi.org/project/polydb/)
+[![Python](https://img.shields.io/pypi/pyversions/polydb)](https://pypi.org/project/polydb/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 One async API for **PostgreSQL**, **MongoDB**, **SQLite**, and **MySQL**.
+
+Source: <https://github.com/Genius740Code/poldb>
 
 `polydb` gives application code a single async API for CRUD, schema, transactions,
 and raw-query escape hatches, backed by three adapters (Postgres, Mongo, and a
@@ -19,6 +25,12 @@ management**):
 | `connect()` / `disconnect()` / `ping()` / async context manager | ✅ SQLite leg (`aiosqlite`) works; Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` (see build order §6) |
 | `pool_size`, `timeout` query params | ✅ parsed; ignored-with-warning on SQLite (single-writer file) |
 | CRUD, schema, transactions, raw queries | ⬜ Not started |
+
+## Installation
+
+```bash
+pip install polydb
+```
 
 ## Quick start (SQLite — the one working leg)
 
@@ -49,9 +61,9 @@ returning an **unconnected** instance:
 
 ## Under the hood
 
-- `docs/connection.md` — connection URL format, adapter resolution, tuning knobs.
-- `examples/switching_backends.py` — one script, three connection strings.
-- `plan.md` — planning document: feature list, DSL spec, build order, testing strategy.
+- [docs/connection.md](docs/connection.md) — connection URL format, adapter resolution, tuning knobs.
+- [examples/switching_backends.py](examples/switching_backends.py) — one script, three connection strings.
+- [plan.md](plan.md) — planning document: feature list, DSL spec, build order, testing strategy.
 
 ## Development
 
