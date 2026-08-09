@@ -101,7 +101,7 @@ def parse_connection_string(url: str) -> ConnectionConfig:
         # sqlite:///:memory:          -> path="/:memory:"
         raw_path = parts.path
         if raw_path == "/:memory:":
-            database = ":memory:"
+            database: str | None = ":memory:"
         elif raw_path.startswith("//"):
             database = raw_path[1:]  # keep exactly one leading '/' -> absolute path
         else:

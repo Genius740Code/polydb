@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -13,6 +14,8 @@ from polydb.results import (
 )
 from polydb.schema import Schema
 from polydb.url_parser import ConnectionConfig
+
+logger = logging.getLogger("polydb.base")
 
 
 class Transaction(ABC):
@@ -90,7 +93,19 @@ class BaseAdapter(ABC):
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        await self.disconnect()
+        # Always release the connection, but never mask an in-body exception
+        # with a cleanup failure — a failing disconnect during error handling
+        # is logged/discarded in favor of the original error.
+        try:
+            await self.disconnect()
+        except Exception as cleanup_error:
+            if exc_type is None:
+                raise
+            logger.warning(
+                "Ignoring disconnect failure while handling an error in "
+                "async with block: %s",
+                cleanup_error,
+            )
 
     # -- 1.2 Create -------------------------------------------------------------
 

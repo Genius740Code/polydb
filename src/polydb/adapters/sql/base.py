@@ -5,6 +5,7 @@ from typing import Any
 
 from polydb.adapters.sql.dialects import DIALECTS, Dialect
 from polydb.base import BaseAdapter, Transaction
+from polydb.exceptions import InvalidConnectionStringError
 from polydb.results import DeleteResult, InsertManyResult, InsertResult, UpdateResult, UpsertResult
 from polydb.schema import Schema
 from polydb.url_parser import ConnectionConfig
@@ -46,12 +47,17 @@ class SqlAdapter(BaseAdapter):
             return
 
         if self.config.dialect == "sqlite":
+            database = self.config.database
+            if database is None:
+                raise InvalidConnectionStringError(
+                    "sqlite connection string must include a file path or ':memory:'"
+                )
+
             import aiosqlite
 
-            self._conn = await aiosqlite.connect(
-                self.config.database, timeout=self.config.timeout
-            )
-            self._conn.row_factory = aiosqlite.Row
+            conn = await aiosqlite.connect(database, timeout=self.config.timeout)
+            conn.row_factory = aiosqlite.Row
+            self._conn = conn
         else:
             raise NotImplementedError(
                 "MySQL leg (asyncmy) not implemented yet. See planning doc §6, "
@@ -61,12 +67,17 @@ class SqlAdapter(BaseAdapter):
         self._connected = True
 
     async def disconnect(self) -> None:
-        """Close the connection, releasing the file handle / socket."""
-        if not self._connected:
-            return
-        await self._conn.close()
-        self._conn = None
+        """Close the connection, releasing the file handle / socket.
+
+        Idempotent — calling on a never-connected or already-disconnected
+        adapter is a no-op. The connection handle is detached *before* the
+        ``close()`` await runs, so a failing close can never leave the adapter
+        stuck in a "connected" state.
+        """
+        conn, self._conn = self._conn, None
         self._connected = False
+        if conn is not None:
+            await conn.close()
 
     async def ping(self) -> bool:
         """Cheap round-trip health check: ``SELECT 1``."""

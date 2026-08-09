@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from polydb.base import BaseAdapter
 from polydb.exceptions import InvalidConnectionStringError
 from polydb.url_parser import ConnectionConfig, parse_connection_string
+
+_cleanup_logger = logging.getLogger("polydb.database")
 
 
 def _build_adapter(config: ConnectionConfig) -> BaseAdapter:
@@ -84,7 +87,19 @@ class Database:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        await self.disconnect()
+        # Always release the connection, but never mask an in-body exception
+        # with a cleanup failure — a failing disconnect during error handling
+        # is logged/discarded in favor of the original error.
+        try:
+            await self.disconnect()
+        except Exception as cleanup_error:
+            if exc_type is None:
+                raise
+            _cleanup_logger.warning(
+                "Ignoring disconnect failure while handling an error in "
+                "async with block: %s",
+                cleanup_error,
+            )
 
     def __getattr__(self, name: str) -> Any:
         # Only reached for attributes not found on Database itself, so this

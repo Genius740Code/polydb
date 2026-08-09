@@ -71,6 +71,29 @@ async with Database.from_url("sqlite:///:memory:") as db:
 
 Calls that require an open connection raise `ConnectionNotOpenError` otherwise.
 
+### Lifecycle guarantees
+
+- **`connect()` is idempotent.** Calling it twice opens a single handle; the
+  second call is a no-op.
+- **`disconnect()` is idempotent in both directions.** Disconnecting before
+  connecting, or disconnecting twice, is a no-op. A failed driver `close()`
+  can never strand the adapter "connected": the handle is detached (and state
+  cleared) *before* `close()` runs.
+- **`connect()` failure leaves the adapter cleanly disconnected.** If the
+  driver open raises, the adapter remains at its initial "not connected"
+  state and a retry is safe.
+- **A failed `connect()` after resolution is a clean failure** — if the
+  `from_url` parse step would produce a database-less SQLite URL, `connect()`
+  raises `InvalidConnectionStringError` rather than opening something
+  nonsensical. (The parser itself already rejects `sqlite:///`.)
+- **The `async with` block releases the connection on every exit path** — a
+  clean exit, an in-body exception, or a `disconnect()` failure. This also
+  means a connection is never leaked when the body raises.
+- **Cleanup never masks an in-body exception.** If the body raises and
+  `disconnect()` fails too, the body's exception propagates and the cleanup
+  failure is logged as a warning instead of replacing it. If only cleanup
+  fails (no body error), the `disconnect()` error propagates.
+
 ## Relationship to planning-doc §6 (build order)
 
 - Step 1 (contract: `BaseAdapter`, `Database`, `url_parser`, exceptions) — **done**.

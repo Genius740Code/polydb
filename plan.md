@@ -26,20 +26,22 @@ Support legend: ✅ Full · 🟡 Partial (works, with a caveat noted) · ❌ Not
 
 Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update this column as work
 lands; it tracks **implementation progress**, separate from the support-level columns above
-which describe **design intent**. As of this revision: issue #1 (`from_url`) is done,
-and issues #2–6 are in progress for the SQLite leg (the only live connection so far).
+which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
+(`connect`), #3 (`disconnect`), and #5 (`async with` context manager) are done for the
+SQLite leg (the only live connection so far); #4 (`ping`) and #6 (pool tuning knobs) are
+in progress, and everything else is not started.
 
-**Progress summary: 1 / 28 features implemented (4%).**
+**Progress summary: 4 / 28 features implemented (14%).**
 
 ### 1.1 Connection management
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
 | 1 | `Database.from_url(url: str) -> Database` | Factory: parses a connection string, returns the correct adapter instance, unconnected. | ✅ | ✅ | ✅ | ✅ Done |
-| 2 | `async def connect(self) -> None` | Opens the underlying pool/client. Idempotent — calling twice is a no-op. | ✅ | ✅ | ✅ | 🔨 In progress |
-| 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 2 | `async def connect(self) -> None` | Opens the underlying pool/client. Idempotent — calling twice is a no-op. | ✅ | ✅ | ✅ | ✅ Done |
+| 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | ✅ Done |
 | 4 | `async def ping(self) -> bool` | Cheap round-trip health check. | ✅ | ✅ | ✅ | 🔨 In progress |
-| 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | ✅ Done |
 | 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params. | ✅ | ✅ | 🟡 SQLite has no real pool (single-writer file), so `pool_size` is accepted but ignored with a logged warning. | 🔨 In progress |
 
 ### 1.2 Create
