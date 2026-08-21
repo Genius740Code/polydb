@@ -41,6 +41,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
       - name: Rewrite version to dev build
         run: |
           BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n1)
