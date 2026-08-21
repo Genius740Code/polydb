@@ -1,5 +1,5 @@
 [project]
-name = "polydb"
+name = "genius74o-polydb"
 version = "0.1.0"
 description = "One async API for Postgres, MongoDB, SQLite, and MySQL."
 readme = "README.md"

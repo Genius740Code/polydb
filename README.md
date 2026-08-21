@@ -1,7 +1,7 @@
 # polydb
 
-[![PyPI](https://img.shields.io/pypi/v/polydb)](https://pypi.org/project/polydb/)
-[![Python](https://img.shields.io/pypi/pyversions/polydb)](https://pypi.org/project/polydb/)
+[![PyPI](https://img.shields.io/pypi/v/genius74o-polydb)](https://pypi.org/project/genius74o-polydb/)
+[![Python](https://img.shields.io/pypi/pyversions/genius74o-polydb)](https://pypi.org/project/genius74o-polydb/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 One async API for **PostgreSQL**, **MongoDB**, **SQLite**, and **MySQL**.
@@ -44,10 +44,13 @@ respective build steps land (see build order §6).
 
 ## Installation
 
+The PyPI distribution is `genius74o-polydb` (the plain `polydb` name is
+squatted); the Python package you import is still `polydb`:
+
 ```bash
-pip install polydb              # core (no drivers)
-pip install "polydb[sqlite]"    # + a driver, or: postgres / mongo / mysql
-pip install "polydb[all]"       # every driver
+pip install genius74o-polydb              # core (no drivers)
+pip install "genius74o-polydb[sqlite]"    # + a driver, or: postgres / mongo / mysql
+pip install "genius74o-polydb[all]"       # every driver
 ```
 
 ## Quick start (SQLite — the one working leg)
@@ -100,8 +103,8 @@ The [`publish.yml`](.github/workflows/publish.yml) workflow automates publishing
 
 | Push to | Tests | Published to | Version |
 | --- | --- | --- | --- |
-| `development` | ✅ gate | [TestPyPI](https://test.pypi.org/project/polydb/) | auto `<base>.dev<run>` (e.g. `0.1.0.dev42`) — every commit gets a unique installable version |
-| `master` | ✅ gate | [PyPI](https://pypi.org/project/polydb/) | exactly what's in `pyproject.toml` |
+| `development` | ✅ gate | [TestPyPI](https://test.pypi.org/project/genius74o-polydb/) | auto `<base>.dev<run>` (e.g. `0.1.0.dev42`) — every commit gets a unique installable version |
+| `master` | ✅ gate | [PyPI](https://pypi.org/project/genius74o-polydb/) | exactly what's in `pyproject.toml` |
 
 To cut a release: bump `version` in `pyproject.toml`, merge `development`
 into `master`, and push — PyPI rejects re-uploaded versions, so bump first.
