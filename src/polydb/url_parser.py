@@ -40,8 +40,10 @@ class ConnectionConfig:
         database: Database name (Postgres/Mongo/MySQL) or file path (SQLite).
             For ``sqlite:///path/to/file.db`` this is ``path/to/file.db``.
             For ``sqlite:///:memory:`` this is ``:memory:``.
-        pool_size: Pool size, from the ``pool_size`` query param, default 10.
-        timeout: Timeout in seconds, from the ``timeout`` query param, default 30.0.
+        pool_size: Pool size, from the ``pool_size`` query param (validated >= 1),
+            default 10.
+        timeout: Timeout in seconds, from the ``timeout`` query param
+            (validated > 0), default 30.0.
         options: Every other query param, kept verbatim for adapter-specific use.
     """
 
@@ -59,6 +61,62 @@ class ConnectionConfig:
     options: dict[str, Any] = field(default_factory=dict)
 
 
+def _parse_pool_size(raw: str | None, url: str) -> int:
+    """Parse the ``pool_size`` query param into a validated positive int.
+
+    Args:
+        raw: The raw string value, or ``None`` when the param is absent.
+        url: The full connection string, used only for error messages.
+
+    Returns:
+        The pool size, or ``_DEFAULT_POOL_SIZE`` when ``raw`` is ``None``.
+
+    Raises:
+        InvalidConnectionStringError: If the value is not an integer or is < 1.
+    """
+    if raw is None:
+        return _DEFAULT_POOL_SIZE
+    try:
+        pool_size = int(raw)
+    except ValueError:
+        raise InvalidConnectionStringError(
+            f"pool_size must be an integer, got {raw!r} in {url!r}"
+        ) from None
+    if pool_size < 1:
+        raise InvalidConnectionStringError(
+            f"pool_size must be >= 1, got {pool_size} in {url!r}"
+        )
+    return pool_size
+
+
+def _parse_timeout(raw: str | None, url: str) -> float:
+    """Parse the ``timeout`` query param into a validated positive float.
+
+    Args:
+        raw: The raw string value, or ``None`` when the param is absent.
+        url: The full connection string, used only for error messages.
+
+    Returns:
+        The timeout in seconds, or ``_DEFAULT_TIMEOUT_SECONDS`` when absent.
+
+    Raises:
+        InvalidConnectionStringError: If the value is not numeric or is <= 0.
+    """
+    if raw is None:
+        return _DEFAULT_TIMEOUT_SECONDS
+    try:
+        timeout = float(raw)
+    except ValueError:
+        raise InvalidConnectionStringError(
+            f"timeout must be a number (seconds), got {raw!r} in {url!r}"
+        ) from None
+    if timeout <= 0:
+        raise InvalidConnectionStringError(
+            f"timeout must be > 0 seconds, got {timeout} in {url!r}"
+        )
+    return timeout
+
+
 def parse_connection_string(url: str) -> ConnectionConfig:
     """Parse a connection string into a :class:`ConnectionConfig`.
 
@@ -71,8 +129,9 @@ def parse_connection_string(url: str) -> ConnectionConfig:
         The parsed, backend-agnostic connection config.
 
     Raises:
-        InvalidConnectionStringError: If the URL has no scheme, or the scheme is not
-            one polydb recognizes.
+        InvalidConnectionStringError: If the URL has no scheme, the scheme is not
+            one polydb recognizes, or ``pool_size``/``timeout`` are malformed or
+            out of range.
     """
     if not url or "://" not in url:
         raise InvalidConnectionStringError(
@@ -92,8 +151,8 @@ def parse_connection_string(url: str) -> ConnectionConfig:
 
     query = {k: v[-1] for k, v in parse_qs(parts.query).items()}
 
-    pool_size = int(query.pop("pool_size", _DEFAULT_POOL_SIZE))
-    timeout = float(query.pop("timeout", _DEFAULT_TIMEOUT_SECONDS))
+    pool_size = _parse_pool_size(query.pop("pool_size", None), url)
+    timeout = _parse_timeout(query.pop("timeout", None), url)
 
     if scheme == "sqlite":
         # sqlite:///relative/path.db  -> netloc="" path="/relative/path.db"  (3 slashes = relative)

@@ -189,3 +189,116 @@ async def test_context_manager_body_error_not_masked_by_cleanup_error(tmp_path, 
 async def test_in_memory_sqlite():
     async with Database.from_url("sqlite:///:memory:") as db:
         assert await db.ping() is True
+
+
+# -- §1.1 issue #4: ping reports unhealthy as False, never a raw driver error ---
+
+
+async def test_ping_returns_false_when_round_trip_fails(tmp_path):
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db")
+    await db.connect()
+    try:
+        async def _boom_execute(sql):
+            raise OSError("disk I/O error")
+
+        db._adapter._conn.execute = _boom_execute
+        assert await db.ping() is False
+    finally:
+        await db.disconnect()
+
+
+async def test_ping_failure_is_logged_not_raised(tmp_path, caplog):
+    import logging
+
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db")
+    await db.connect()
+    try:
+        async def _boom_execute(sql):
+            raise OSError("disk I/O error")
+
+        db._adapter._conn.execute = _boom_execute
+        with caplog.at_level(logging.WARNING, logger="polydb.adapters.sql"):
+            assert await db.ping() is False
+        assert "ping()" in caplog.text
+        assert "disk I/O error" in caplog.text
+    finally:
+        await db.disconnect()
+
+
+async def test_ping_recovers_after_failed_round_trip(tmp_path):
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db")
+    await db.connect()
+
+    conn = db._adapter._conn
+    healthy_execute = conn.execute
+
+    async def _boom_execute(sql):
+        raise OSError("disk I/O error")
+
+    conn.execute = _boom_execute
+    assert await db.ping() is False
+
+    # A healthy round-trip after an unhealthy one must still report True —
+    # ping() failure never poisons adapter state.
+    conn.execute = healthy_execute
+    assert await db.ping() is True
+    await db.disconnect()
+
+
+# -- §1.1 issue #6: pool_size / timeout knobs ------------------------------------
+
+
+async def test_pool_size_and_timeout_exposed_on_adapter(tmp_path):
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db?pool_size=3&timeout=7.5")
+    assert db.pool_size == 3  # delegated through Database.__getattr__
+    assert db.timeout == 7.5
+    assert db._adapter.config.pool_size == 3
+
+
+async def test_pool_size_and_timeout_defaults_when_absent(tmp_path):
+    from polydb.url_parser import _DEFAULT_POOL_SIZE, _DEFAULT_TIMEOUT_SECONDS
+
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db")
+    assert db._adapter.pool_size == _DEFAULT_POOL_SIZE
+    assert db._adapter.timeout == _DEFAULT_TIMEOUT_SECONDS
+
+
+async def test_timeout_is_wired_into_sqlite_driver(tmp_path, monkeypatch):
+    import aiosqlite
+
+    captured_kwargs = {}
+    real_connect = aiosqlite.connect
+
+    def _recording_connect(database, **kwargs):
+        captured_kwargs.update(kwargs)
+        return real_connect(database, **kwargs)
+
+    monkeypatch.setattr(aiosqlite, "connect", _recording_connect)
+    db = Database.from_url(f"sqlite:////{tmp_path}/test.db?timeout=2.5")
+    async with db:
+        assert await db.ping() is True
+    assert captured_kwargs.get("timeout") == 2.5
+
+
+async def test_explicit_nondefault_pool_size_warns_on_sqlite(tmp_path, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="polydb.adapters.sql"):
+        Database.from_url(f"sqlite:////{tmp_path}/test.db?pool_size=4")
+    assert any("pool_size" in record.message and "ignored" in record.message
+               for record in caplog.records)
+
+
+async def test_default_or_mysql_pool_size_does_not_warn(caplog):
+    import logging
+
+    # SQLite at default pool_size: no warning.
+    with caplog.at_level(logging.WARNING, logger="polydb.adapters.sql"):
+        Database.from_url("sqlite:///:memory:")
+    assert not [r for r in caplog.records if "pool_size" in r.message]
+
+    # MySQL supports pools (leg itself still pending build step 5).
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="polydb.adapters.sql"):
+        Database.from_url("mysql://user:pass@localhost:3306/db?pool_size=4")
+    assert not [r for r in caplog.records if "pool_size" in r.message]

@@ -62,6 +62,20 @@ class BaseAdapter(ABC):
         self.config = config
         self._connected = False
 
+    @property
+    def pool_size(self) -> int:
+        """Pool-size tuning knob (``?pool_size=`` in the connection string).
+
+        Backends without a real pool (SQLite's single-writer file) accept but
+        ignore it, with a logged warning at construction time.
+        """
+        return self.config.pool_size
+
+    @property
+    def timeout(self) -> float:
+        """Connection/query timeout in seconds (``?timeout=`` in the URL)."""
+        return self.config.timeout
+
     def _ensure_connected(self) -> None:
         """Guard clause used at the top of every method that needs an open connection.
 
@@ -86,7 +100,16 @@ class BaseAdapter(ABC):
 
     @abstractmethod
     async def ping(self) -> bool:
-        """Cheap round-trip health check. Returns True if the backend is reachable."""
+        """Cheap round-trip health check.
+
+        Returns:
+            ``True`` if the backend answered the round-trip, ``False`` if it
+            did not (the failure is logged, never raised — a health check
+            reports, it doesn't throw).
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+        """
 
     async def __aenter__(self) -> BaseAdapter:
         await self.connect()

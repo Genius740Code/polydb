@@ -27,11 +27,11 @@ Support legend: ✅ Full · 🟡 Partial (works, with a caveat noted) · ❌ Not
 Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update this column as work
 lands; it tracks **implementation progress**, separate from the support-level columns above
 which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
-(`connect`), #3 (`disconnect`), and #5 (`async with` context manager) are done for the
-SQLite leg (the only live connection so far); #4 (`ping`) and #6 (pool tuning knobs) are
-in progress, and everything else is not started.
+(`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), and #6
+(`pool_size`/`timeout` knobs) are done for the SQLite leg (the only live connection so
+far); everything else is not started.
 
-**Progress summary: 4 / 28 features implemented (14%).**
+**Progress summary: 6 / 28 features implemented (21%).**
 
 ### 1.1 Connection management
 
@@ -40,9 +40,9 @@ in progress, and everything else is not started.
 | 1 | `Database.from_url(url: str) -> Database` | Factory: parses a connection string, returns the correct adapter instance, unconnected. | ✅ | ✅ | ✅ | ✅ Done |
 | 2 | `async def connect(self) -> None` | Opens the underlying pool/client. Idempotent — calling twice is a no-op. | ✅ | ✅ | ✅ | ✅ Done |
 | 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | ✅ Done |
-| 4 | `async def ping(self) -> bool` | Cheap round-trip health check. | ✅ | ✅ | ✅ | 🔨 In progress |
+| 4 | `async def ping(self) -> bool` | Cheap round-trip health check. Returns `False` (logged, never raised) when the backend does not answer; `ConnectionNotOpenError` before `connect()`. | ✅ | ✅ | ✅ | ✅ Done |
 | 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | ✅ Done |
-| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params. | ✅ | ✅ | 🟡 SQLite has no real pool (single-writer file), so `pool_size` is accepted but ignored with a logged warning. | 🔨 In progress |
+| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params and validated at parse time; exposed as properties on every adapter. | ✅ (pool wiring lands with build step 3) | ✅ (client wiring lands with build step 4) | 🟡 SQLite has no real pool (single-writer file), so a non-default `pool_size` is accepted but ignored with a logged warning. MySQL leg wires it in at build step 5. | ✅ Done |
 
 ### 1.2 Create
 

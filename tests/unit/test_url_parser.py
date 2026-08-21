@@ -67,6 +67,30 @@ def test_pool_size_and_timeout_query_params():
     assert cfg.options == {}
 
 
+def test_pool_size_non_integer_rejected():
+    with pytest.raises(InvalidConnectionStringError, match="pool_size"):
+        parse_connection_string("sqlite:///x.db?pool_size=abc")
+
+
+def test_pool_size_below_one_rejected():
+    with pytest.raises(InvalidConnectionStringError, match="pool_size"):
+        parse_connection_string("sqlite:///x.db?pool_size=0")
+    with pytest.raises(InvalidConnectionStringError, match="pool_size"):
+        parse_connection_string("mysql://h/db?pool_size=-2")
+
+
+def test_timeout_non_numeric_rejected():
+    with pytest.raises(InvalidConnectionStringError, match="timeout"):
+        parse_connection_string("sqlite:///x.db?timeout=soon")
+
+
+def test_timeout_not_positive_rejected():
+    with pytest.raises(InvalidConnectionStringError, match="timeout"):
+        parse_connection_string("postgres://u@h/db?timeout=0")
+    with pytest.raises(InvalidConnectionStringError, match="timeout"):
+        parse_connection_string("mongodb://h/db?timeout=-1")
+
+
 def test_unknown_options_kept_verbatim():
     cfg = parse_connection_string("postgres://u@h/db?sslmode=require")
     assert cfg.options == {"sslmode": "require"}

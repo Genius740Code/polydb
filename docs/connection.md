@@ -43,10 +43,18 @@ understood by polydb itself:
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
-| `pool_size` | `10` | Pool/client size. 🟡 SQLite has no real pool (single-writer file) — accepted but ignored, with a logged warning. |
-| `timeout` | `30.0` | Connection timeout in seconds. |
+| `pool_size` | `10` | Pool/client size. Must be an integer ≥ 1. 🟡 SQLite has no real pool (single-writer file) — accepted but ignored, with a logged warning when a non-default value is given. |
+| `timeout` | `30.0` | Connection timeout in seconds. Must be a number > 0. |
 
 E.g. `sqlite:///app.db?pool_size=5&timeout=3.0`.
+
+Malformed values raise `InvalidConnectionStringError` at `from_url()` time — a
+non-integer `pool_size`, a non-numeric `timeout`, or either out of its valid
+range never reaches an adapter (§3.4 convention: polydb exceptions only).
+
+The parsed knobs are also readable directly off any adapter instance
+(`db.pool_size`, `db.timeout`) — Postgres/Mongo/MySQL wire them into their
+native pools during their respective build steps.
 
 All other query params (e.g. `sslmode=require`) are preserved verbatim in
 `ConnectionConfig.options` for adapter-specific use.
@@ -70,6 +78,16 @@ async with Database.from_url("sqlite:///:memory:") as db:
 ```
 
 Calls that require an open connection raise `ConnectionNotOpenError` otherwise.
+
+### `ping()` semantics (`§1.1 #4`)
+
+- **Before `connect()`** → raises `ConnectionNotOpenError` (same guard clause as
+  every other method — pinging an unopened connection is a caller bug).
+- **Healthy round-trip** → returns `True`.
+- **Round-trip fails** (backend down, disk error, driver in a bad state) →
+  returns `False`. The driver error is logged at WARNING level and swallowed:
+  a health check reports, it never throws. A later ping can return `True`
+  again — a failed ping never poisons adapter state.
 
 ### Lifecycle guarantees
 

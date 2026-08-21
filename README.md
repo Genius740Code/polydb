@@ -22,9 +22,12 @@ management**):
 | Feature | Status |
 | ---- | ------ |
 | `Database.from_url(url) -> Database` — factory resolves every supported scheme to its adapter instance | ✅ Done |
-| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ SQLite leg (`aiosqlite`) works; Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` (see build order §6) |
-| `pool_size`, `timeout` query params | ✅ parsed; ignored-with-warning on SQLite (single-writer file) |
+| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite leg; `ping` returns `False` instead of raising on an unreachable backend) |
+| `pool_size`, `timeout` query params | ✅ Done — validated at parse time, exposed as `db.pool_size` / `db.timeout`; SQLite accepts-and-ignores non-default `pool_size` with a warning (single-writer file) |
 | CRUD, schema, transactions, raw queries | ⬜ Not started |
+
+Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` until their
+respective build steps land (see build order §6).
 
 ## Installation
 

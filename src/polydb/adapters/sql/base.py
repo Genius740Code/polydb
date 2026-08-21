@@ -8,7 +8,7 @@ from polydb.base import BaseAdapter, Transaction
 from polydb.exceptions import InvalidConnectionStringError
 from polydb.results import DeleteResult, InsertManyResult, InsertResult, UpdateResult, UpsertResult
 from polydb.schema import Schema
-from polydb.url_parser import ConnectionConfig
+from polydb.url_parser import ConnectionConfig, _DEFAULT_POOL_SIZE
 
 logger = logging.getLogger("polydb.adapters.sql")
 
@@ -32,7 +32,7 @@ class SqlAdapter(BaseAdapter):
         self.dialect: Dialect = DIALECTS[config.dialect]  # type: ignore[index]
         self._conn: Any = None  # aiosqlite.Connection once connected
 
-        if config.dialect == "sqlite" and not self.dialect.supports_pool and config.pool_size != 10:
+        if config.dialect == "sqlite" and not self.dialect.supports_pool and config.pool_size != _DEFAULT_POOL_SIZE:
             logger.warning(
                 "pool_size=%s was requested but SQLite has no real connection pool "
                 "(single-writer file) — the value is accepted but ignored.",
@@ -80,10 +80,23 @@ class SqlAdapter(BaseAdapter):
             await conn.close()
 
     async def ping(self) -> bool:
-        """Cheap round-trip health check: ``SELECT 1``."""
+        """Cheap round-trip health check: ``SELECT 1``.
+
+        Returns:
+            ``True`` if the backend answered, ``False`` if the round-trip
+            failed (the driver error is logged at WARNING level and swallowed —
+            a health check reports, it doesn't throw).
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+        """
         self._ensure_connected()
-        cursor = await self._conn.execute("SELECT 1")
-        await cursor.close()
+        try:
+            cursor = await self._conn.execute("SELECT 1")
+            await cursor.close()
+        except Exception as err:
+            logger.warning("ping() round-trip failed on %s: %r", self.dialect.name, err)
+            return False
         return True
 
     # -- everything below: not built yet (see class docstring) --------------------
