@@ -27,11 +27,12 @@ Support legend: ✅ Full · 🟡 Partial (works, with a caveat noted) · ❌ Not
 Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update this column as work
 lands; it tracks **implementation progress**, separate from the support-level columns above
 which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
-(`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), and #6
-(`pool_size`/`timeout` knobs) are done for the SQLite leg (the only live connection so
-far); everything else is not started.
+(`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), #6
+(`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), and #9
+(`upsert_one`) are done for the SQLite leg (the only live connection so far); everything
+else is not started.
 
-**Progress summary: 6 / 28 features implemented (21%).**
+**Progress summary: 9 / 28 features implemented (32%).**
 
 ### 1.1 Connection management
 
@@ -48,9 +49,9 @@ far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 7 | `async def insert_one(self, collection: str, doc: dict) -> InsertResult` | Insert a single record. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 8 | `async def insert_many(self, collection: str, docs: list[dict]) -> InsertManyResult` | Bulk insert. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 9 | `async def upsert_one(self, collection: str, filter: dict, doc: dict) -> UpsertResult` | Insert-or-update by filter match. | ✅ (`ON CONFLICT`) | ✅ (`upsert=True`) | ✅ (`INSERT ... ON CONFLICT` / `ON DUPLICATE KEY`) | ⬜ Not started |
+| 7 | `async def insert_one(self, collection: str, doc: dict) -> InsertResult` | Insert a single record. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `inserted_id` is the driver's `lastrowid`) |
+| 8 | `async def insert_many(self, collection: str, docs: list[dict]) -> InsertManyResult` | Bulk insert. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`, one shared commit = all-or-nothing) |
+| 9 | `async def upsert_one(self, collection: str, filter: dict, doc: dict) -> UpsertResult` | Insert-or-update by filter match. | ✅ (`ON CONFLICT`) | ✅ (`upsert=True`) | ✅ (`INSERT ... ON CONFLICT` / `ON DUPLICATE KEY`) | ✅ Done (SQLite leg; implemented as Mongo-style find-then-update-first-match-or-insert so arbitrary filters work without unique-index knowledge — filter merges into the inserted row, doc wins on key conflicts) |
 
 ### 1.3 Read
 

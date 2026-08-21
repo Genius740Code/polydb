@@ -16,15 +16,18 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built. Implemented so far (planning doc §1.1, **Connection
-management**):
+Planned, not fully built. Implemented so far (planning doc §1.1 **Connection
+management** + §1.2 **Create**):
 
 | Feature | Status |
 | ---- | ------ |
 | `Database.from_url(url) -> Database` — factory resolves every supported scheme to its adapter instance | ✅ Done |
 | `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite leg; `ping` returns `False` instead of raising on an unreachable backend) |
 | `pool_size`, `timeout` query params | ✅ Done — validated at parse time, exposed as `db.pool_size` / `db.timeout`; SQLite accepts-and-ignores non-default `pool_size` with a warning (single-writer file) |
-| CRUD, schema, transactions, raw queries | ⬜ Not started |
+| `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite leg; `inserted_id` = rowid) |
+| `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
+| `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite leg; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
+| Read, update, delete, schema, transactions, raw queries | ⬜ Not started |
 
 Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` until their
 respective build steps land (see build order §6).
