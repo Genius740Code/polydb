@@ -6,7 +6,7 @@
 
 One async API for **PostgreSQL**, **MongoDB**, **SQLite**, and **MySQL**.
 
-Source: <https://github.com/Genius740Code/poldb>
+Source: <https://github.com/Genius740Code/polydb>
 
 `polydb` gives application code a single async API for CRUD, schema, transactions,
 and raw-query escape hatches, backed by three adapters (Postgres, Mongo, and a
@@ -104,7 +104,12 @@ The [`publish.yml`](.github/workflows/publish.yml) workflow automates publishing
 To cut a release: bump `version` in `pyproject.toml`, merge `development`
 into `master`, and push — PyPI rejects re-uploaded versions, so bump first.
 
-Publishing uses [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
-(OIDC) — no API tokens are stored in GitHub secrets. One-time setup: register
-the publisher on each index under environment names `testpypi` (test.pypi.org)
-and `pypi` (pypi.org), workflow file `publish.yml`.
+Publishing authenticates with PyPI API tokens stored as GitHub repo secrets
+(Settings → Secrets and variables → Actions):
+
+| Secret | Where to create it |
+| --- | --- |
+| `TESTPYPI_API_TOKEN` | [test.pypi.org](https://test.pypi.org) → Account settings → API tokens |
+| `PYPI_API_TOKEN` | [pypi.org](https://pypi.org) → Account settings → API tokens |
+
+or from the CLI: `gh secret set TESTPYPI_API_TOKEN` / `gh secret set PYPI_API_TOKEN`.

@@ -5,7 +5,6 @@ on:
     branches: [development, master]
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -35,7 +34,6 @@ jobs:
     if: github.ref == 'refs/heads/development'
     needs: test
     runs-on: ubuntu-latest
-    environment: testpypi
     steps:
       - uses: actions/checkout@v4
 
@@ -56,13 +54,13 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
 
   # master branch -> official PyPI, version taken from pyproject.toml as-is
   publish-pypi:
     if: github.ref == 'refs/heads/master'
     needs: test
     runs-on: ubuntu-latest
-    environment: pypi
     steps:
       - uses: actions/checkout@v4
 
@@ -79,3 +77,5 @@ jobs:
         run: python -m build
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
