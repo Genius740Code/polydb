@@ -11,6 +11,7 @@ postgres = ["asyncpg"]
 mongo = ["motor"]
 sqlite = ["aiosqlite"]
 mysql = ["asyncmy"]
+all = ["asyncpg", "motor", "aiosqlite", "asyncmy"]
 dev = ["pytest", "pytest-asyncio", "hypothesis", "testcontainers"]
 
 [build-system]

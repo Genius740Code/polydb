@@ -45,7 +45,9 @@ respective build steps land (see build order §6).
 ## Installation
 
 ```bash
-pip install polydb
+pip install polydb              # core (no drivers)
+pip install "polydb[sqlite]"    # + a driver, or: postgres / mongo / mysql
+pip install "polydb[all]"       # every driver
 ```
 
 ## Quick start (SQLite — the one working leg)
