@@ -90,3 +90,21 @@ pip install -e ".[dev]"
 # run the test suite from the repo root
 PYTHONPATH=src pytest
 ```
+
+### Branching & releases
+
+All development happens on the `development` branch; `master` is release-only.
+The [`publish.yml`](.github/workflows/publish.yml) workflow automates publishing:
+
+| Push to | Tests | Published to | Version |
+| --- | --- | --- | --- |
+| `development` | ✅ gate | [TestPyPI](https://test.pypi.org/project/polydb/) | auto `<base>.dev<run>` (e.g. `0.1.0.dev42`) — every commit gets a unique installable version |
+| `master` | ✅ gate | [PyPI](https://pypi.org/project/polydb/) | exactly what's in `pyproject.toml` |
+
+To cut a release: bump `version` in `pyproject.toml`, merge `development`
+into `master`, and push — PyPI rejects re-uploaded versions, so bump first.
+
+Publishing uses [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+(OIDC) — no API tokens are stored in GitHub secrets. One-time setup: register
+the publisher on each index under environment names `testpypi` (test.pypi.org)
+and `pypi` (pypi.org), workflow file `publish.yml`.
