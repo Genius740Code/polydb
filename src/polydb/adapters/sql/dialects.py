@@ -16,11 +16,15 @@ class Dialect:
     name: str
     placeholder: str  # "?" for sqlite, "%s" for mysql
     supports_pool: bool
-    identifier_quote: str  # '"' for sqlite/postgres, '`' for mysql
+    # SQLite deliberately uses backticks (not '"'): a double-quoted token that
+    # doesn't resolve to a column silently degrades to a string literal in
+    # SQLite (legacy DQS misfeature) — e.g. WHERE "nope" REGEXP '.' would
+    # match every row. Backtick quoting always raises "no such column".
+    identifier_quote: str  # '`' for sqlite/mysql, '"' for postgres
 
 
 SqliteDialect = Dialect(
-    name="sqlite", placeholder="?", supports_pool=False, identifier_quote='"'
+    name="sqlite", placeholder="?", supports_pool=False, identifier_quote="`"
 )
 MysqlDialect = Dialect(
     name="mysql", placeholder="%s", supports_pool=True, identifier_quote="`"

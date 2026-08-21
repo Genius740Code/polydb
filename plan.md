@@ -28,11 +28,12 @@ Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update 
 lands; it tracks **implementation progress**, separate from the support-level columns above
 which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
 (`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), #6
-(`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), and #9
-(`upsert_one`) are done for the SQLite leg (the only live connection so far); everything
-else is not started.
+(`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), #9 (`upsert_one`),
+and #10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
+`aggregate`, backed by the shared `sql_compiler.py` filter translator) are done for the
+SQLite leg (the only live connection so far); everything else is not started.
 
-**Progress summary: 9 / 28 features implemented (32%).**
+**Progress summary: 14 / 28 features implemented (50%).**
 
 ### 1.1 Connection management
 
@@ -57,11 +58,11 @@ else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 10 | `async def find_one(self, collection: str, filter: dict) -> dict \| None` | Fetch first matching record. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 11 | `async def find(self, collection: str, filter: dict \| None = None, *, sort=None, limit=None, offset=None) -> list[dict]` | Fetch matching records. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 12 | `async def count(self, collection: str, filter: dict \| None = None) -> int` | Count matching records. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 13 | `async def exists(self, collection: str, filter: dict) -> bool` | Existence check, short-circuits (LIMIT 1 / findOne projection). | ✅ | ✅ | ✅ | ⬜ Not started |
-| 14 | `async def aggregate(self, collection: str, pipeline: list[dict]) -> list[dict]` | Grouping/aggregation. | 🟡 A **restricted** pipeline subset (`$match`, `$group`, `$sort`, `$limit`, `$count`) is translated to `GROUP BY`/`HAVING`. Anything beyond that raises `UnsupportedOperationError`. | ✅ Native. | 🟡 Same restricted subset as Postgres. | ⬜ Not started |
+| 10 | `async def find_one(self, collection: str, filter: dict) -> dict \| None` | Fetch first matching record. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 DSL filter support via `sql_compiler.py`) |
+| 11 | `async def find(self, collection: str, filter: dict \| None = None, *, sort=None, limit=None, offset=None) -> list[dict]` | Fetch matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `sort` is `(field, 1\|-1)` pairs, later pairs break ties; offset without limit compiles `LIMIT -1 OFFSET n`) |
+| 12 | `async def count(self, collection: str, filter: dict \| None = None) -> int` | Count matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg) |
+| 13 | `async def exists(self, collection: str, filter: dict) -> bool` | Existence check, short-circuits (LIMIT 1 / findOne projection). | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `SELECT 1 … WHERE … LIMIT 1`) |
+| 14 | `async def aggregate(self, collection: str, pipeline: list[dict]) -> list[dict]` | Grouping/aggregation. | 🟡 A **restricted** pipeline subset (`$match`, `$group`, `$sort`, `$limit`, `$count`) is translated to `GROUP BY`/`HAVING`. Anything beyond that raises `UnsupportedOperationError`. | ✅ Native. | 🟡 Same restricted subset as Postgres. | ✅ Done (SQLite leg; subset implemented — repeatable `$match`, then at most one `$group`/`$sort`/`$limit`/`$count` in canonical order, accumulators `$sum`/`$avg`/`$min`/`$max`/`$count`; group output is Mongo-shaped incl. nested composite `_id`; a global `_id: null` group over zero input rows yields `[]`, not SQL's phantom NULL row. Known divergences from Mongo: NULL-handling inside `MIN`/`MAX`/`AVG` follows SQL semantics) |
 
 ### 1.4 Update
 
@@ -171,6 +172,13 @@ The compiler always emits **parameterized** SQL — no string interpolation of v
 Field names are validated against `^[A-Za-z_][A-Za-z0-9_]*$` and identifier-quoted
 (`"field"` / `` `field` ``) before being placed in the query, which closes the SQL-injection
 door on the *column-name* side (values are already safe via parameterization).
+
+> **Implementation note (SQLite quoting):** the SQLite leg quotes identifiers with
+> **backticks**, not double quotes. A double-quoted token that doesn't resolve to a column
+> silently degrades to a string literal in SQLite (legacy DQS misfeature) — e.g.
+> `WHERE "nope" REGEXP '.'` matches *every* row instead of raising. Backtick quoting always
+> raises `no such column`, so a filter on a misspelled field surfaces as
+> `PolydbQueryError` rather than silently wrong results.
 
 ### 2.4 Update-operator subset (used by `update_one`/`update_many`)
 

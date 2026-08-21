@@ -7,6 +7,7 @@ from typing import Any, NoReturn
 
 from polydb.adapters.sql.dialects import DIALECTS, Dialect
 from polydb.base import BaseAdapter, Transaction
+from polydb.compilers.sql_compiler import AggregatePlan, SqlCompiler, validate_identifier
 from polydb.exceptions import InvalidConnectionStringError, InvalidFilterError, PolydbQueryError
 from polydb.results import DeleteResult, InsertManyResult, InsertResult, UpdateResult, UpsertResult
 from polydb.schema import Schema
@@ -14,50 +15,38 @@ from polydb.url_parser import ConnectionConfig, _DEFAULT_POOL_SIZE
 
 logger = logging.getLogger("polydb.adapters.sql")
 
-_NOT_BUILT_YET = (
-    "{name}() is not implemented yet — the shared SQL compiler (sql_compiler.py) "
-    "hasn't been built. See planning doc §6, build order step 2."
-)
+_NOT_BUILT_YET = "{name}() is not implemented yet. See planning doc §6 build order."
 
-# §2.3: field/table names are validated against this pattern before being
-# identifier-quoted into SQL — values are parameterized, names must be safe too.
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_validate_identifier = validate_identifier
 
 
-def _validate_identifier(name: str, kind: str) -> str:
-    """Validate a column or table name against the DSL identifier pattern.
+def _sqlite_regexp(pattern: Any, value: Any) -> bool:
+    """REGEXP user function backing the ``$regex`` translation (§2.2).
 
-    Args:
-        name: The identifier as supplied by application code.
-        kind: ``"table"`` or ``"column"`` — used only in error messages.
-
-    Returns:
-        The validated name, unchanged.
-
-    Raises:
-        InvalidFilterError: If the name is empty, not a string, or contains
-            characters outside ``[A-Za-z0-9_]``.
+    SQLite resolves ``expr REGEXP pattern`` through this callback (registered
+    at connect() time); it mirrors Mongo's ``$regex`` substring-search
+    semantics via ``re.search``. NULLs never match, matching SQL comparison
+    semantics for missing fields.
     """
-    if not isinstance(name, str) or not _IDENTIFIER_PATTERN.match(name):
-        raise InvalidFilterError(
-            f"Invalid {kind} name {name!r}: must match ^[A-Za-z_][A-Za-z0-9_]*$"
-        )
-    return name
+    if pattern is None or value is None:
+        return False
+    return re.search(str(pattern), str(value)) is not None
 
 
 class SqlAdapter(BaseAdapter):
     """SQL-generic adapter: SQLite (via ``aiosqlite``) and MySQL (via ``asyncmy``)
     behind one class, differing only by ``self.dialect``.
 
-    Connection management (§1.1) and the Create operations (§1.2) are
-    implemented. Everything else raises ``NotImplementedError`` with a pointer
-    to the build order — this is intentional scope for the current step, not a
-    bug.
+    Connection management (§1.1), the Create operations (§1.2), and the Read
+    operations (§1.3) are implemented. Everything else raises
+    ``NotImplementedError`` with a pointer to the build order — this is
+    intentional scope for the current step, not a bug.
     """
 
     def __init__(self, config: ConnectionConfig) -> None:
         super().__init__(config)
         self.dialect: Dialect = DIALECTS[config.dialect]  # type: ignore[index]
+        self._compiler = SqlCompiler(self.dialect)
         self._conn: Any = None  # aiosqlite.Connection once connected
 
         if config.dialect == "sqlite" and not self.dialect.supports_pool and config.pool_size != _DEFAULT_POOL_SIZE:
@@ -85,6 +74,7 @@ class SqlAdapter(BaseAdapter):
 
             conn = await aiosqlite.connect(database, timeout=self.config.timeout)
             conn.row_factory = aiosqlite.Row
+            await conn.create_function("REGEXP", 2, _sqlite_regexp)
             self._conn = conn
         else:
             raise NotImplementedError(
@@ -337,12 +327,23 @@ class SqlAdapter(BaseAdapter):
             matched_count=0, modified_count=0, upserted_id=upserted_id
         )
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.3 Read -------------------------------------------------------------------
 
     async def find_one(
         self, collection: str, filter: dict[str, Any]
     ) -> dict[str, Any] | None:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="find_one"))
+        """Fetch the first document matching ``filter``. See BaseAdapter.find_one."""
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        query = self._compiler.compile_find(  # 2. translate
+            table, filter, sort=None, limit=1, offset=None
+        )
+        try:  # 3. execute
+            cursor = await self._conn.execute(query.sql, query.params)
+            row = await cursor.fetchone()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("find_one", collection, err)
+        return dict(row) if row is not None else None  # 5. normalize + return
 
     async def find(
         self,
@@ -353,18 +354,103 @@ class SqlAdapter(BaseAdapter):
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[dict[str, Any]]:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="find"))
+        """Fetch every document matching ``filter``. See BaseAdapter.find_one.
+
+        ``sort`` is a list of ``(field, direction)`` pairs with direction ``1``
+        (asc) or ``-1`` (desc); later pairs break ties of earlier ones.
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        query = self._compiler.compile_find(  # 2. translate
+            table, filter, sort=sort, limit=limit, offset=offset
+        )
+        try:  # 3. execute
+            cursor = await self._conn.execute(query.sql, query.params)
+            rows = await cursor.fetchall()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("find", collection, err)
+        return [dict(row) for row in rows]  # 5. normalize + return
 
     async def count(self, collection: str, filter: dict[str, Any] | None = None) -> int:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="count"))
+        """Count documents matching ``filter``. See BaseAdapter.count."""
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        query = self._compiler.compile_count(table, filter)  # 2. translate
+        try:  # 3. execute
+            cursor = await self._conn.execute(query.sql, query.params)
+            row = await cursor.fetchone()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("count", collection, err)
+        return int(row[0]) if row is not None else 0  # 5. normalize + return
 
     async def exists(self, collection: str, filter: dict[str, Any]) -> bool:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="exists"))
+        """Existence check via ``SELECT 1 … LIMIT 1`` — short-circuits on the
+        first match rather than counting. See BaseAdapter.exists."""
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        query = self._compiler.compile_exists(table, filter)  # 2. translate
+        try:  # 3. execute
+            cursor = await self._conn.execute(query.sql, query.params)
+            row = await cursor.fetchone()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("exists", collection, err)
+        return row is not None  # 5. normalize + return
 
     async def aggregate(
         self, collection: str, pipeline: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="aggregate"))
+        """Run a restricted aggregation pipeline. See BaseAdapter.aggregate.
+
+        Supported subset (§1.3 #14): ``$match`` (repeatable), then at most one
+        each of ``$group``, ``$sort``, ``$limit``, ``$count`` in that order;
+        accumulators ``$sum``/``$avg``/``$min``/``$max``/``$count``. Anything
+        beyond that raises ``UnsupportedOperationError``.
+
+        Group results are Mongo-shaped: single-key groups yield ``_id`` as a
+        scalar, composite ``{"city": "$city"}`` groups nest under ``_id`` as a
+        dict, and ``_id: null`` groups report ``"_id": None``.
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        plan: AggregatePlan = self._compiler.compile_aggregate(table, pipeline)  # 2. translate
+        try:  # 3. execute
+            cursor = await self._conn.execute(plan.sql, plan.params)
+            rows = await cursor.fetchall()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("aggregate", collection, err)
+        return self._shape_aggregate_rows(plan, rows)  # 5. normalize + return
+
+    @staticmethod
+    def _shape_aggregate_rows(
+        plan: AggregatePlan, rows: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Reshape compiled-aggregate rows into Mongo-shaped documents.
+
+        ``"_id.<part>"`` aliases fold back into a nested ``_id`` dict; plain
+        ungrouped pipelines pass through as raw documents; ``$count`` output is
+        a single-key doc per row.
+        """
+        if plan.count_field is not None:
+            return [{plan.count_field: row[plan.count_field]} for row in rows]
+        if not plan.grouped:
+            return [dict(row) for row in rows]
+
+        shaped: list[dict[str, Any]] = []
+        for row in rows:
+            doc: dict[str, Any] = {}
+            id_value: Any = None
+            id_parts: dict[str, Any] = {}
+            for key, value in dict(row).items():
+                if key == "_id":
+                    id_value = value
+                elif key.startswith("_id."):
+                    id_parts[key[len("_id.") :]] = value
+                else:
+                    doc[key] = value
+            shaped.append({"_id": id_parts if id_parts else id_value, **doc})
+        return shaped
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     async def update_one(
         self, collection: str, filter: dict[str, Any], update: dict[str, Any]

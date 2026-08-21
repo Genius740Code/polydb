@@ -17,7 +17,7 @@ support matrix and build order.
 ## Current status
 
 Planned, not fully built. Implemented so far (planning doc §1.1 **Connection
-management** + §1.2 **Create**):
+management** + §1.2 **Create** + §1.3 **Read**):
 
 | Feature | Status |
 | ---- | ------ |
@@ -27,7 +27,17 @@ management** + §1.2 **Create**):
 | `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite leg; `inserted_id` = rowid) |
 | `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
 | `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite leg; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
-| Read, update, delete, schema, transactions, raw queries | ⬜ Not started |
+| `find_one(collection, filter)` → `dict \| None` | ✅ Done (SQLite leg; full Mongo-shaped filter DSL — `$eq/$ne/$gt/$gte/$lt/$lte`, `$in/$nin`, `$exists`, `$regex`, `$like`, `$and/$or/$nor/$not`) |
+| `find(collection, filter, *, sort, limit, offset)` → `list[dict]` | ✅ Done (SQLite leg; `sort` takes `(field, 1 \| -1)` pairs) |
+| `count(collection, filter)` → `int` | ✅ Done (SQLite leg) |
+| `exists(collection, filter)` → `bool` | ✅ Done (SQLite leg; short-circuits via `LIMIT 1`) |
+| `aggregate(collection, pipeline)` → `list[dict]` | ✅ Done (SQLite leg; restricted subset: repeatable `$match`, then at most one `$group` (`$sum/$avg/$min/$max/$count`) / `$sort` / `$limit` / `$count`; anything else raises `UnsupportedOperationError`) |
+| Update, delete, schema, transactions, raw queries | ⬜ Not started |
+
+Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
+column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
+SQLite quotes identifiers with backticks on purpose — double-quoted unknown
+identifiers silently become string literals in SQLite, hiding typos.
 
 Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` until their
 respective build steps land (see build order §6).
