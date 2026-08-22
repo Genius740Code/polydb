@@ -29,11 +29,13 @@ lands; it tracks **implementation progress**, separate from the support-level co
 which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
 (`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), #6
 (`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), #9 (`upsert_one`),
-and #10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
-`aggregate`, backed by the shared `sql_compiler.py` filter translator) are done for the
-SQLite leg (the only live connection so far); everything else is not started.
+#10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
+`aggregate`, backed by the shared `sql_compiler.py` filter translator), and #15–#17 (the
+full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by the new
+`compile_update_set` §2.4 update-operator translator) are done for the SQLite leg (the
+only live connection so far); everything else is not started.
 
-**Progress summary: 14 / 28 features implemented (50%).**
+**Progress summary: 17 / 28 features implemented (61%).**
 
 ### 1.1 Connection management
 
@@ -68,9 +70,9 @@ SQLite leg (the only live connection so far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 15 | `async def update_one(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update first match. `update` uses `$set`/`$inc`/`$unset` operators (see §2). | ✅ | ✅ | ✅ | ⬜ Not started |
-| 16 | `async def update_many(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update all matches. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 17 | `async def replace_one(self, collection: str, filter: dict, doc: dict) -> UpdateResult` | Full-document replace. | ✅ | ✅ | ✅ | ⬜ Not started |
+| 15 | `async def update_one(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update first match. `update` uses `$set`/`$inc`/`$unset` operators (see §2). | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 filter DSL via the shared compiler + §2.4 update subset via `compile_update_set`; first match targeted by rowid; empty SET clause reports honest `matched_count` with `modified_count=0`) |
+| 16 | `async def update_many(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one parameterized `UPDATE … WHERE`. Known divergence from Mongo: both counts come from the statement's rowcount — rows whose values were already equal still count as modified) |
+| 17 | `async def replace_one(self, collection: str, filter: dict, doc: dict) -> UpdateResult` | Full-document replace. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; Mongo replace semantics on a relational row — every non-PK column rewritten, absent doc fields become `NULL`, primary-key columns preserved and rejected if present in `doc` via `PRAGMA table_info` introspection; never upserts) |
 
 ### 1.5 Delete
 

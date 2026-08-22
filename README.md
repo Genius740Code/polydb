@@ -17,7 +17,7 @@ support matrix and build order.
 ## Current status
 
 Planned, not fully built. Implemented so far (planning doc §1.1 **Connection
-management** + §1.2 **Create** + §1.3 **Read**):
+management** + §1.2 **Create** + §1.3 **Read** + §1.4 **Update**):
 
 | Feature | Status |
 | ---- | ------ |
@@ -32,7 +32,10 @@ management** + §1.2 **Create** + §1.3 **Read**):
 | `count(collection, filter)` → `int` | ✅ Done (SQLite leg) |
 | `exists(collection, filter)` → `bool` | ✅ Done (SQLite leg; short-circuits via `LIMIT 1`) |
 | `aggregate(collection, pipeline)` → `list[dict]` | ✅ Done (SQLite leg; restricted subset: repeatable `$match`, then at most one `$group` (`$sum/$avg/$min/$max/$count`) / `$sort` / `$limit` / `$count`; anything else raises `UnsupportedOperationError`) |
-| Update, delete, schema, transactions, raw queries | ⬜ Not started |
+| `update_one(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; full filter DSL + §2.4 update operators `$set`/`$inc`/`$unset` — `$push` raises `UnsupportedOperationError`; first match only) |
+| `update_many(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; one parameterized `UPDATE … WHERE` — counts come from rowcount, so already-equal values still count as modified) |
+| `replace_one(collection, filter, doc)` → `UpdateResult` | ✅ Done (SQLite leg; full-document replace — absent doc fields become `NULL`, primary-key columns preserved and rejected in `doc`; never upserts) |
+| Delete, schema, transactions, raw queries | ⬜ Not started |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.

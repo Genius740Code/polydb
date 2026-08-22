@@ -37,10 +37,10 @@ class SqlAdapter(BaseAdapter):
     """SQL-generic adapter: SQLite (via ``aiosqlite``) and MySQL (via ``asyncmy``)
     behind one class, differing only by ``self.dialect``.
 
-    Connection management (§1.1), the Create operations (§1.2), and the Read
-    operations (§1.3) are implemented. Everything else raises
-    ``NotImplementedError`` with a pointer to the build order — this is
-    intentional scope for the current step, not a bug.
+    Connection management (§1.1), the Create operations (§1.2), the Read
+    operations (§1.3), and the Update operations (§1.4) are implemented.
+    Everything else raises ``NotImplementedError`` with a pointer to the build
+    order — this is intentional scope for the current step, not a bug.
     """
 
     def __init__(self, config: ConnectionConfig) -> None:
@@ -182,6 +182,21 @@ class SqlAdapter(BaseAdapter):
         raise PolydbQueryError(
             f"{self.dialect.name} {operation} failed on collection {collection!r}: {err}"
         ) from err
+
+    async def _table_layout(self, collection: str) -> tuple[bool, list[str], set[str]]:
+        """Introspect the table behind ``collection`` (SQLite ``PRAGMA table_info``).
+
+        Returns:
+            ``(exists, columns, pk_columns)`` — every real SQLite table has at
+            least one column, so an empty column list unambiguously means the
+            table does not exist. Reads only; opens no transaction.
+        """
+        table = self._validated_table(collection)
+        cursor = await self._conn.execute(f"PRAGMA table_info({table})")
+        rows = await cursor.fetchall()
+        columns = [row[1] for row in rows]
+        pk_columns = {row[1] for row in rows if row[5]}
+        return bool(columns), columns, pk_columns
 
     # -- 1.2 Create ----------------------------------------------------------------
 
@@ -450,22 +465,161 @@ class SqlAdapter(BaseAdapter):
             shaped.append({"_id": id_parts if id_parts else id_value, **doc})
         return shaped
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.4 Update ----------------------------------------------------------------
 
     async def update_one(
         self, collection: str, filter: dict[str, Any], update: dict[str, Any]
     ) -> UpdateResult:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="update_one"))
+        """Update the first document matching ``filter``. See BaseAdapter.update_one.
+
+        ``update`` uses the §2.4 operator subset (``$set``/``$inc``/``$unset``;
+        ``$push`` raises ``UnsupportedOperationError``). Targets exactly the
+        first matching row (Mongo ``update_one`` semantics): the row's
+        ``rowid`` is resolved first, then the UPDATE runs against that single
+        handle. An update whose SET clause compiles empty (e.g. ``{}``) still
+        reports an honest ``matched_count``, but ``modified_count=0``.
+
+        Raises:
+            InvalidFilterError: Malformed filter or update dict.
+            UnsupportedOperationError: ``$push`` in the update.
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        where_sql, where_params = self._compiler.compile_where(filter)  # 2. translate
+        set_sql, set_params = self._compiler.compile_update_set(update)
+
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                f"SELECT rowid FROM {table}{where_sql} LIMIT 1", where_params
+            )
+            matched_row = await cursor.fetchone()
+            if matched_row is None:
+                return UpdateResult(matched_count=0, modified_count=0)
+            modified_count = 0
+            if set_sql:
+                await self._conn.execute(
+                    f"UPDATE {table}{set_sql} "
+                    f"WHERE rowid = {self.dialect.placeholder}",
+                    [*set_params, matched_row[0]],
+                )
+                modified_count = 1
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("update_one", collection, err)
+        return UpdateResult(  # 5. result type
+            matched_count=1, modified_count=modified_count
+        )
 
     async def update_many(
         self, collection: str, filter: dict[str, Any], update: dict[str, Any]
     ) -> UpdateResult:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="update_many"))
+        """Update every document matching ``filter``. See BaseAdapter.update_many.
+
+        One parameterized ``UPDATE … WHERE …`` statement. Both counts come from
+        the statement's rowcount — SQL counts every row the UPDATE ran against,
+        including rows whose values were already equal (a documented divergence
+        from Mongo, which reports only genuinely-changed documents). With an
+        empty SET clause the method still counts matches so ``matched_count``
+        stays honest while ``modified_count=0``.
+
+        Raises:
+            InvalidFilterError: Malformed filter or update dict.
+            UnsupportedOperationError: ``$push`` in the update.
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        where_sql, where_params = self._compiler.compile_where(filter)  # 2. translate
+        set_sql, set_params = self._compiler.compile_update_set(update)
+
+        try:  # 3. execute
+            if not set_sql:
+                cursor = await self._conn.execute(
+                    f"SELECT COUNT(*) FROM {table}{where_sql}", where_params
+                )
+                matched = int((await cursor.fetchone())[0])
+                return UpdateResult(matched_count=matched, modified_count=0)
+            cursor = await self._conn.execute(
+                f"UPDATE {table}{set_sql}{where_sql}",
+                [*set_params, *where_params],
+            )
+            modified = max(cursor.rowcount, 0)  # rowcount is -1 when undeterminable
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("update_many", collection, err)
+        return UpdateResult(  # 5. result type
+            matched_count=modified, modified_count=modified
+        )
 
     async def replace_one(
         self, collection: str, filter: dict[str, Any], doc: dict[str, Any]
     ) -> UpdateResult:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="replace_one"))
+        """Full-document replace. See BaseAdapter.replace_one.
+
+        Mongo replace semantics mapped onto a relational row: every column of
+        the first matching row outside the primary key is rewritten — fields
+        present in ``doc`` take their values, absent ones become ``NULL``.
+        Primary-key columns are the relational identity handle and are always
+        preserved; passing one in ``doc`` raises ``InvalidFilterError``. No
+        match → no write (``replace_one`` never upserts; see ``upsert_one``).
+
+        Raises:
+            InvalidFilterError: Malformed filter or a primary-key column in doc.
+            PolydbQueryError: The collection names no existing table, or the
+                driver rejected a column/value (wrapped driver error).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        self._validated_columns(doc)  # fail fast on bad field names
+
+        exists, columns, pk_columns = await self._table_layout(collection)  # 2. translate
+        if not exists:
+            raise PolydbQueryError(
+                f"{self.dialect.name} replace_one failed on collection "
+                f"{collection!r}: no such table"
+            )
+        for key in doc:
+            if key in pk_columns:
+                raise InvalidFilterError(
+                    f"replace_one cannot change primary-key column {key!r} — "
+                    f"the relational identity of the row is preserved"
+                )
+        assignments: list[str] = []
+        params: list[Any] = []
+        for column in columns:
+            if column in pk_columns:
+                continue
+            quoted = self._quote_ident(column)
+            if column in doc:
+                assignments.append(f"{quoted} = {self.dialect.placeholder}")
+                params.append(doc[column])
+            else:
+                assignments.append(f"{quoted} = NULL")
+        set_sql = " SET " + ", ".join(assignments) if assignments else ""
+
+        where_sql, where_params = self._compiler.compile_where(filter)
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                f"SELECT rowid FROM {table}{where_sql} LIMIT 1", where_params
+            )
+            matched_row = await cursor.fetchone()
+            if matched_row is None:
+                return UpdateResult(matched_count=0, modified_count=0)
+            modified_count = 0
+            if set_sql:
+                await self._conn.execute(
+                    f"UPDATE {table}{set_sql} "
+                    f"WHERE rowid = {self.dialect.placeholder}",
+                    [*params, matched_row[0]],
+                )
+                modified_count = 1
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("replace_one", collection, err)
+        return UpdateResult(  # 5. result type
+            matched_count=1, modified_count=modified_count
+        )
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     async def delete_one(self, collection: str, filter: dict[str, Any]) -> DeleteResult:
         raise NotImplementedError(_NOT_BUILT_YET.format(name="delete_one"))

@@ -376,3 +376,88 @@ def test_multi_match_stages_are_anded(compiler):
 def test_non_list_pipeline_rejected(compiler):
     with pytest.raises(InvalidFilterError):
         compiler.compile_aggregate("`t`", {"$match": {}})
+
+
+# -- compile_update_set: §2.4 ---------------------------------------------------------
+
+
+def test_update_set_compiles_assignments(compiler):
+    set_sql, params = compiler.compile_update_set({"$set": {"status": "open", "n": 3}})
+    assert set_sql == " SET `status` = ?, `n` = ?"
+    assert params == ["open", 3]
+
+
+def test_update_inc_compiles_to_self_addition(compiler):
+    set_sql, params = compiler.compile_update_set({"$inc": {"counter": 2}})
+    assert set_sql == " SET `counter` = `counter` + ?"
+    assert params == [2]
+
+
+def test_update_unset_compiles_to_null_and_ignores_value(compiler):
+    for payload in (True, "", None, 1):
+        assert compiler.compile_update_set({"$unset": {"note": payload}}) == (
+            " SET `note` = NULL",
+            [],
+        )
+
+
+def test_update_combined_operators_keep_order_and_params(compiler):
+    update = {"$unset": {"note": True}, "$set": {"a": 1}, "$inc": {"b": 5}}
+    set_sql, params = compiler.compile_update_set(update)
+    assert set_sql == " SET `note` = NULL, `a` = ?, `b` = `b` + ?"
+    assert params == [1, 5]
+
+
+def test_update_empty_dict_and_empty_payloads_are_noops(compiler):
+    assert compiler.compile_update_set({}) == ("", [])
+    assert compiler.compile_update_set({"$set": {}}) == ("", [])
+
+
+def test_update_push_is_unsupported(compiler):
+    with pytest.raises(UnsupportedOperationError):
+        compiler.compile_update_set({"$push": {"tags": "x"}})
+
+
+def test_update_unknown_operator_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"$rename": {"a": "b"}})
+
+
+def test_update_bare_field_rejected_replacement_belongs_to_replace_one(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"a": 1})
+
+
+def test_update_non_dict_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set("SET a = 1")
+
+
+def test_update_operator_with_non_dict_payload_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"$set": 3})
+
+
+def test_update_inc_requires_numeric_argument(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"$inc": {"n": "2"}})
+    with pytest.raises(InvalidFilterError):  # bool is not a number here
+        compiler.compile_update_set({"$inc": {"n": True}})
+
+
+def test_update_column_in_two_operators_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"$set": {"a": 1}, "$unset": {"a": True}})
+
+
+def test_update_invalid_field_name_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_update_set({"$set": {"bad name": 1}})
+
+
+def test_update_mysql_placeholder_style():
+    set_sql, params = SqlCompiler(MysqlDialect).compile_update_set(
+        {"$set": {"a": 1}, "$inc": {"b": 2}}
+    )
+    assert set_sql == " SET `a` = %s, `b` = `b` + %s"
+    assert params == [1, 2]

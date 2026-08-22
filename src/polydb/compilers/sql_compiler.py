@@ -23,6 +23,9 @@ _COMPARISON_SQL = {
 
 _LOGICAL_OPERATORS = ("$and", "$or", "$nor", "$not")
 
+#: §2.4 update operators accepted by update_one()/update_many().
+_UPDATE_OPERATORS = ("$set", "$unset", "$inc")
+
 _ACCUMULATORS = ("$sum", "$avg", "$min", "$max", "$count")
 
 _ACCUMULATOR_SQL = {"$sum": "SUM", "$avg": "AVG", "$min": "MIN", "$max": "MAX"}
@@ -300,6 +303,82 @@ class SqlCompiler:
         if op == "$or":
             return "(" + joined + ")", params
         return "(NOT (" + joined + "))", params  # $nor
+
+    # -- update compilation (§2.4) -------------------------------------------------------
+
+    def compile_update_set(self, update: dict[str, Any]) -> tuple[str, list[Any]]:
+        """Compile a §2.4 update-operator dict into ``SET`` SQL + params.
+
+        Args:
+            update: Operator dict — ``$set``, ``$inc``, ``$unset`` (§2.4). A
+                bare replacement document is not valid here; use
+                ``replace_one()`` for full-document replacement. ``$unset``
+                ignores its value (any payload compiles to ``SET … = NULL``).
+
+        Returns:
+            ``(set_sql, params)`` where ``set_sql`` starts with ``" SET "`` and
+            params are ordered to match; ``("", [])`` when nothing would
+            change (empty dict or only empty operator payloads).
+
+        Raises:
+            InvalidFilterError: Non-dict update, bare field keys (operator-less
+                update), unknown operators, non-numeric ``$inc`` arguments,
+                or one column assigned by two different operators.
+            UnsupportedOperationError: ``$push`` — no portable array-append in
+                relational SQL without a JSON-column convention (§2.4, §8.5).
+        """
+        if not isinstance(update, dict):
+            raise InvalidFilterError(
+                f"update must be an operator dict ($set/$inc/$unset), got "
+                f"{type(update).__name__}"
+            )
+
+        assignments: list[str] = []
+        params: list[Any] = []
+        assigned: set[str] = set()
+
+        for op, payload in update.items():
+            if op == "$push":
+                raise UnsupportedOperationError(
+                    "$push has no portable SQL translation (§2.4); store arrays "
+                    "in a JSON column and update them via raw() instead"
+                )
+            if op not in _UPDATE_OPERATORS:
+                if isinstance(op, str) and op.startswith("$"):
+                    raise InvalidFilterError(f"Unsupported update operator {op!r}")
+                raise InvalidFilterError(
+                    f"update must use $set/$inc/$unset operators; got bare field "
+                    f"{op!r} — use replace_one() for full-document replacement"
+                )
+            if not isinstance(payload, dict):
+                raise InvalidFilterError(
+                    f"{op} requires a field-to-value dict, got "
+                    f"{type(payload).__name__}"
+                )
+            for name, value in payload.items():
+                column = self._column(name)
+                if column in assigned:
+                    raise InvalidFilterError(
+                        f"column {name!r} appears in more than one update operator"
+                    )
+                assigned.add(column)
+                if op == "$unset":
+                    assignments.append(f"{column} = NULL")
+                elif op == "$set":
+                    assignments.append(f"{column} = {self._ph}")
+                    params.append(value)
+                else:  # $inc
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        raise InvalidFilterError(
+                            f"$inc requires a numeric argument for {name!r}, "
+                            f"got {value!r}"
+                        )
+                    assignments.append(f"{column} = {column} + {self._ph}")
+                    params.append(value)
+
+        if not assignments:
+            return "", []
+        return " SET " + ", ".join(assignments), params  # $nor
 
     # -- read operations (§1.3) ---------------------------------------------------------
 
