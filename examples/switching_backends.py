@@ -15,8 +15,6 @@ from __future__ import annotations
 import asyncio
 
 from polydb import Database
-from polydb.adapters.mongo import MongoAdapter
-from polydb.adapters.postgres import PostgresAdapter
 from polydb.adapters.sql.base import SqlAdapter
 
 BACKENDS = {
@@ -44,7 +42,7 @@ async def probe(name: str, url: str) -> None:
         except NotImplementedError as err:
             status = f"not built yet: {err}"
 
-    print(f"{name:<8} -> {kind:<16} {status}")
+    print(f"{name:<8} -> {label:<26} {status}")
 
 
 async def main() -> None:

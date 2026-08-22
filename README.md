@@ -16,8 +16,10 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built. Implemented so far (planning doc §1.1 **Connection
-management** + §1.2 **Create** + §1.3 **Read** + §1.4 **Update**):
+Planned, not fully built: **17 / 28 features implemented (61%)**, all on the
+SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
+§1.3 **Read** + §1.4 **Update**). The full per-backend matrix lives in
+[docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
 | Feature | Status |
 | ---- | ------ |
@@ -71,6 +73,18 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+Once a table exists (create one with plain SQL — `create_collection()` is a
+later build step, §1.6), the full Create/Read/Update surface works against it:
+
+```python
+await db.insert_one("users", {"name": "ada", "age": 36})
+adults = await db.find("users", {"age": {"$gt": 21}}, sort=[("age", -1)])
+```
+
+Filters use the Mongo-shaped DSL documented in
+[docs/dsl_spec.md](docs/dsl_spec.md); see
+[examples/basic_crud.py](examples/basic_crud.py) for a complete runnable tour.
+
 ## Connecting to other backends
 
 `Database.from_url()` resolves all supported schemes to their adapter class,
@@ -86,6 +100,9 @@ returning an **unconnected** instance:
 ## Under the hood
 
 - [docs/connection.md](docs/connection.md) — connection URL format, adapter resolution, tuning knobs.
+- [docs/dsl_spec.md](docs/dsl_spec.md) — filter/update DSL: operators, grammar, aggregation subset, safety guarantees.
+- [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md) — per-backend support + build status for all 28 features.
+- [examples/basic_crud.py](examples/basic_crud.py) — every implemented operation, runnable against SQLite.
 - [examples/switching_backends.py](examples/switching_backends.py) — one script, three connection strings.
 - [plan.md](plan.md) — planning document: feature list, DSL spec, build order, testing strategy.
 

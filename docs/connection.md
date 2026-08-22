@@ -115,5 +115,12 @@ Calls that require an open connection raise `ConnectionNotOpenError` otherwise.
 ## Relationship to planning-doc §6 (build order)
 
 - Step 1 (contract: `BaseAdapter`, `Database`, `url_parser`, exceptions) — **done**.
-- Step 2 (SQL family, SQLite leg, connection management) — **done**.
-- Steps 3–5 (Postgres connect, Mongo connect, MySQL connect) — **pending**.
+- Step 2 (SQL family, SQLite leg) — **done**: connection management plus the
+  Create (`insert_one`/`insert_many`/`upsert_one`), Read
+  (`find_one`/`find`/`count`/`exists`/`aggregate`), and Update
+  (`update_one`/`update_many`/`replace_one`) surfaces. See
+  [supported_operations_matrix.md](supported_operations_matrix.md) for exactly
+  what is live, and [dsl_spec.md](dsl_spec.md) for the filter/update DSL those
+  methods accept.
+- Steps 3–5 (Postgres connect, Mongo connect, MySQL connect) — **pending**;
+  until then their adapters raise `NotImplementedError` from `connect()`.
