@@ -32,11 +32,13 @@ which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
 #10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
 `aggregate`, backed by the shared `sql_compiler.py` filter translator), #15–#17 (the
 full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by the new
-`compile_update_set` §2.4 update-operator translator), and #18–#19 (the full §1.5 Delete
-surface: `delete_one`, `delete_many`) are done for the SQLite leg (the
+`compile_update_set` §2.4 update-operator translator), #18–#19 (the full §1.5 Delete
+surface: `delete_one`, `delete_many`), and #20–#22 (the collection-lifecycle half of
+§1.6 Schema/structure: `create_collection`, `drop_collection`, `list_collections`)
+are done for the SQLite leg (the
 only live connection so far); everything else is not started.
 
-**Progress summary: 19 / 28 features implemented (68%).**
+**Progress summary: 22 / 28 features implemented (79%).**
 
 ### 1.1 Connection management
 
@@ -86,9 +88,9 @@ only live connection so far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 20 | `async def create_collection(self, name: str, schema: Schema \| None = None) -> None` | Create a table/collection. `schema` is optional structured column spec (see illustrative `Schema` below). | ✅ Required (`schema=None` raises `SchemaRequiredError`). | ✅ `schema` ignored — Mongo is schemaless; a logged info-level note is emitted. | ✅ Required, same as Postgres. | ⬜ Not started |
-| 21 | `async def drop_collection(self, name: str) -> None` | Drop table/collection if exists. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 22 | `async def list_collections(self) -> list[str]` | Enumerate tables/collections. | ✅ | ✅ | ✅ | ⬜ Not started |
+| 20 | `async def create_collection(self, name: str, schema: Schema \| None = None) -> None` | Create a table/collection. `schema` is optional structured column spec (see illustrative `Schema` below). | ✅ Required (`schema=None` raises `SchemaRequiredError`). | ✅ `schema` ignored — Mongo is schemaless; a logged info-level note is emitted. | ✅ Required, same as Postgres. | ✅ Done (SQLite leg; a small Schema→`CREATE TABLE` compiler — `schema=None` or a zero-field schema raises `SchemaRequiredError`; field names validated like any DSL identifier; str/int/float/bool map to native column types, datetime/json stored as TEXT holding ISO-8601 / serialized JSON; nullable/default/primary_key/unique all enforced by the DDL — an `INTEGER PRIMARY KEY` aliases rowid so `inserted_id` works; creating an existing name raises `PolydbQueryError`) |
+| 21 | `async def drop_collection(self, name: str) -> None` | Drop table/collection if exists. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `DROP TABLE IF EXISTS`, idempotent no-op on absent names) |
+| 22 | `async def list_collections(self) -> list[str]` | Enumerate tables/collections. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; sorted user tables from `sqlite_master`, excluding `sqlite_*` internals and views) |
 | 23 | `async def create_index(self, collection: str, fields: list[str], *, unique: bool = False) -> None` | Create an index. | ✅ | ✅ | ✅ | ⬜ Not started |
 | 24 | `async def add_field(self, collection: str, field: str, type_: FieldType, default: Any = None) -> None` | Add a column (relational) / no-op with warning (Mongo, since docs are dynamic). | ✅ | 🟡 No-op + logged warning — new field just appears on next write. | ✅ | ⬜ Not started |
 

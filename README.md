@@ -16,9 +16,10 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **19 / 28 features implemented (68%)**, all on the
+Planned, not fully built: **22 / 28 features implemented (79%)**, all on the
 SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
-§1.3 **Read** + §1.4 **Update** + §1.5 **Delete**). The full per-backend matrix
+§1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
+#20–#22). The full per-backend matrix
 lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
@@ -40,7 +41,10 @@ lives in
 | `replace_one(collection, filter, doc)` → `UpdateResult` | ✅ Done (SQLite leg; full-document replace — absent doc fields become `NULL`, primary-key columns preserved and rejected in `doc`; never upserts) |
 | `delete_one(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; full filter DSL; deletes the first match only) |
 | `delete_many(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the collection) |
-| Schema, transactions, raw queries | ⬜ Not started |
+| `create_collection(name, schema=None)` | ✅ Done (SQLite leg; Schema→`CREATE TABLE` compiler — schema required (`SchemaRequiredError` otherwise); str/int/float/bool native types, datetime/json stored as TEXT; nullable/default/primary_key/unique enforced by the DDL) |
+| `drop_collection(name)` | ✅ Done (SQLite leg; idempotent — dropping an absent name is a silent no-op) |
+| `list_collections()` → `list[str]` | ✅ Done (SQLite leg; sorted user tables, `sqlite_*` internals and views excluded) |
+| Indexes, `add_field`, transactions, raw queries | ⬜ Not started |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
@@ -76,11 +80,20 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Once a table exists (create one with plain SQL — `create_collection()` is a
-later build step, §1.6), the full Create/Read/Update/Delete surface works
-against it:
+Create a collection from a structured schema, then the full
+Create/Read/Update/Delete surface works against it:
 
 ```python
+from polydb.schema import Field, FieldType, Schema
+
+await db.create_collection(
+    "users",
+    Schema(fields=[
+        Field(name="id", type=FieldType.INT, primary_key=True),
+        Field(name="name", type=FieldType.STR),
+        Field(name="age", type=FieldType.INT),
+    ]),
+)
 await db.insert_one("users", {"name": "ada", "age": 36})
 adults = await db.find("users", {"age": {"$gt": 21}}, sort=[("age", -1)])
 ```

@@ -8,7 +8,6 @@ planning doc §6), so you can execute it with no services running:
 Filters and updates use the Mongo-shaped DSL documented in
 docs/dsl_spec.md; the SQL compiler turns them into fully parameterized SQL.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -16,25 +15,37 @@ import tempfile
 from pathlib import Path
 
 from polydb import Database
+from polydb.schema import Field, FieldType, Schema
 
 
-async def _bootstrap_table(db: Database) -> None:
-    """Create the demo table directly.
+async def schema_demo(db: Database) -> None:
+    """Create the demo collection via the public API (§1.6 #20–#22)."""
+    print("-- schema " + "-" * 50)
 
-    ``create_collection()`` is §1.6 and not built yet, so this example creates
-    its table through the underlying driver the same way the contract tests
-    do. This helper disappears once that build step lands.
-    """
-    cursor = await db._adapter._conn.execute(
-        """
-        CREATE TABLE orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            customer TEXT, region TEXT, status TEXT,
-            amount REAL, visits INT, note TEXT
-        )
-        """
+    await db.create_collection(
+        "orders",
+        Schema(
+            fields=[
+                Field(name="id", type=FieldType.INT, primary_key=True),
+                Field(name="customer", type=FieldType.STR),
+                Field(name="region", type=FieldType.STR),
+                Field(name="status", type=FieldType.STR),
+                Field(name="amount", type=FieldType.FLOAT),
+                Field(name="visits", type=FieldType.INT),
+                Field(name="note", type=FieldType.STR),
+            ]
+        ),
     )
-    await cursor.close()
+    await db.create_collection(
+        "scratch",
+        Schema(fields=[Field(name="x", type=FieldType.INT)]),
+    )
+    print(f"create_collection-> {await db.list_collections()}")
+
+    # Dropping an absent name is a silent no-op (idempotent by contract).
+    await db.drop_collection("never_existed")
+    await db.drop_collection("scratch")
+    print(f"drop_collection  -> {await db.list_collections()}")
 
 
 async def create_demo(db: Database) -> None:
@@ -166,8 +177,8 @@ async def main() -> None:
         url = f"sqlite:///{Path(tmp) / 'crud.db'}"
         async with Database.from_url(url) as db:
             assert await db.ping() is True
-            await _bootstrap_table(db)
 
+            await schema_demo(db)
             await create_demo(db)
             await read_demo(db)
             await update_demo(db)

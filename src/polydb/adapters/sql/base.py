@@ -8,9 +8,14 @@ from typing import Any, NoReturn
 from polydb.adapters.sql.dialects import DIALECTS, Dialect
 from polydb.base import BaseAdapter, Transaction
 from polydb.compilers.sql_compiler import AggregatePlan, SqlCompiler, validate_identifier
-from polydb.exceptions import InvalidConnectionStringError, InvalidFilterError, PolydbQueryError
+from polydb.exceptions import (
+    InvalidConnectionStringError,
+    InvalidFilterError,
+    PolydbQueryError,
+    SchemaRequiredError,
+)
 from polydb.results import DeleteResult, InsertManyResult, InsertResult, UpdateResult, UpsertResult
-from polydb.schema import Schema
+from polydb.schema import FieldType, Schema
 from polydb.url_parser import ConnectionConfig, _DEFAULT_POOL_SIZE
 
 logger = logging.getLogger("polydb.adapters.sql")
@@ -18,6 +23,20 @@ logger = logging.getLogger("polydb.adapters.sql")
 _NOT_BUILT_YET = "{name}() is not implemented yet. See planning doc §6 build order."
 
 _validate_identifier = validate_identifier
+
+# Schema type -> column type for CREATE TABLE (§1.6 #20). Deliberately the
+# small common set of §schema.FieldType: SQLite/MySQL both accept these names.
+# DATETIME and JSON are stored as TEXT — ISO-8601 strings and serialized JSON
+# documents respectively; Mongo keeps native types, so cross-backend code
+# should normalize to strings before writing.
+_FIELD_TYPE_TO_SQL: dict[FieldType, str] = {
+    FieldType.STR: "TEXT",
+    FieldType.INT: "INTEGER",
+    FieldType.FLOAT: "REAL",
+    FieldType.BOOL: "INTEGER",
+    FieldType.DATETIME: "TEXT",
+    FieldType.JSON: "TEXT",
+}
 
 
 def _sqlite_regexp(pattern: Any, value: Any) -> bool:
@@ -38,8 +57,9 @@ class SqlAdapter(BaseAdapter):
     behind one class, differing only by ``self.dialect``.
 
     Connection management (§1.1), the Create operations (§1.2), the Read
-    operations (§1.3), the Update operations (§1.4), and the Delete
-    operations (§1.5) are implemented.
+    operations (§1.3), the Update operations (§1.4), the Delete
+    operations (§1.5), and the collection-lifecycle half of Schema/structure
+    (§1.6 #20–#22) are implemented.
     Everything else raises ``NotImplementedError`` with a pointer to the build
     order — this is intentional scope for the current step, not a bug.
     """
@@ -683,16 +703,132 @@ class SqlAdapter(BaseAdapter):
             await self._rollback_and_raise("delete_many", collection, err)
         return DeleteResult(deleted_count=deleted_count)  # 5. result type
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.6 Schema / structure (collection lifecycle: #20–#22) ----------------------
+
+    @staticmethod
+    def _default_sql_literal(value: Any) -> str:
+        """Render a schema field's ``default`` as a DDL literal.
+
+        Booleans become ``1``/``0``; strings are single-quote-escaped. Only
+        plain scalars are accepted — anything else would smuggle non-portable
+        expressions into the DDL.
+
+        Raises:
+            InvalidFilterError: If the default is not ``str``/``int``/``float``/``bool``.
+        """
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float)):
+            return repr(value)
+        if isinstance(value, str):
+            return "'" + value.replace("'", "''") + "'"
+        raise InvalidFilterError(
+            f"Schema default {value!r} must be a plain str/int/float/bool scalar"
+        )
+
+    def _compile_create_table(self, name: str, schema: Schema) -> str:
+        """Compile a ``Schema`` into one parameterless ``CREATE TABLE`` statement."""
+        table = self._validated_table(name)
+        definitions: list[str] = []
+        for spec in schema.fields:
+            column = _validate_identifier(spec.name, "column")
+            parts = [
+                self._quote_ident(column),
+                _FIELD_TYPE_TO_SQL[spec.type],
+            ]
+            if spec.primary_key:
+                parts.append("PRIMARY KEY")
+            if not spec.nullable:
+                parts.append("NOT NULL")
+            if spec.unique and not spec.primary_key:
+                parts.append("UNIQUE")
+            if spec.default is not None:
+                parts.append(f"DEFAULT {self._default_sql_literal(spec.default)}")
+            definitions.append(" ".join(parts))
+        return f"CREATE TABLE {table} ({', '.join(definitions)})"
 
     async def create_collection(self, name: str, schema: Schema | None = None) -> None:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="create_collection"))
+        """Create a table from a structured schema. See BaseAdapter.create_collection.
+
+        Relational backends require the schema — ``schema=None`` (or a schema
+        with zero fields, which cannot define a table) raises
+        ``SchemaRequiredError``. Field names are validated like any other DSL
+        identifier; field types map per ``_FIELD_TYPE_TO_SQL`` (``datetime``
+        and ``json`` columns are TEXT holding ISO-8601 / serialized JSON).
+
+        Creating an already-existing name fails with ``PolydbQueryError`` from
+        the driver (SQL has no silent ``IF NOT EXISTS`` here — dropping first
+        is ``drop_collection()``'s explicit job).
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            SchemaRequiredError: ``schema`` missing or defining no fields.
+            InvalidFilterError: Bad table/column name or non-scalar default.
+            PolydbQueryError: The driver rejected the DDL (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        if schema is None or not schema.fields:
+            raise SchemaRequiredError(
+                f"{self.dialect.name} requires a schema to create collection "
+                f"{name!r}: pass Schema(fields=[Field(...), ...]) with at least "
+                f"one field."
+            )
+        sql = self._compile_create_table(name, schema)  # 2. translate
+
+        try:  # 3. execute
+            await self._conn.execute(sql)
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("create_collection", name, err)
+        # 5. result type — None by contract
 
     async def drop_collection(self, name: str) -> None:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="drop_collection"))
+        """Drop a table if it exists. See BaseAdapter.drop_collection.
+
+        Idempotent by contract (``DROP TABLE IF EXISTS``): dropping an absent
+        name succeeds silently, so cleanup paths never need existence checks.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            InvalidFilterError: Bad collection name.
+            PolydbQueryError: The driver rejected the DDL (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(name)
+
+        try:  # 3. execute
+            await self._conn.execute(f"DROP TABLE IF EXISTS {table}")
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("drop_collection", name, err)
+        # 5. result type — None by contract
 
     async def list_collections(self) -> list[str]:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="list_collections"))
+        """Enumerate user tables, sorted. See BaseAdapter.list_collections.
+
+        Excludes SQLite's internal ``sqlite_*`` catalogs; views are not
+        collections and never appear. (The MySQL leg will swap this query for
+        an ``information_schema.tables`` lookup at its build step.)
+
+        Returns:
+            Plain (unquoted) table names in ascending order.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+        """
+        self._ensure_connected()  # 1. guard
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' "
+                "ORDER BY name"
+            )
+            rows = await cursor.fetchall()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("list_collections", "*", err)
+        return [row[0] for row in rows]  # 5. normalize + return
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     async def create_index(
         self, collection: str, fields: list[str], *, unique: bool = False
