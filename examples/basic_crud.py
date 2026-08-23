@@ -148,6 +148,18 @@ async def update_demo(db: Database) -> None:
     print(f"replace_one     -> modified={result.modified_count}; row now {replaced}")
 
 
+async def delete_demo(db: Database) -> None:
+    print("-- delete " + "-" * 50)
+
+    # delete_one targets exactly the first match.
+    result = await db.delete_one("orders", {"status": "open"})
+    print(f"delete_one      -> deleted={result.deleted_count}")
+
+    # delete_many rewrites every match; {} clears the whole collection.
+    result = await db.delete_many("orders", {"status": "refunded"})
+    print(f"delete_many     -> deleted={result.deleted_count}")
+
+
 async def main() -> None:
     # A temp file keeps repeat runs clean; sqlite:///:memory: works too.
     with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +171,7 @@ async def main() -> None:
             await create_demo(db)
             await read_demo(db)
             await update_demo(db)
+            await delete_demo(db)
 
 
 if __name__ == "__main__":

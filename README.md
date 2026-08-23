@@ -16,9 +16,10 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **17 / 28 features implemented (61%)**, all on the
+Planned, not fully built: **19 / 28 features implemented (68%)**, all on the
 SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
-§1.3 **Read** + §1.4 **Update**). The full per-backend matrix lives in
+§1.3 **Read** + §1.4 **Update** + §1.5 **Delete**). The full per-backend matrix
+lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
 | Feature | Status |
@@ -37,7 +38,9 @@ SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
 | `update_one(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; full filter DSL + §2.4 update operators `$set`/`$inc`/`$unset` — `$push` raises `UnsupportedOperationError`; first match only) |
 | `update_many(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; one parameterized `UPDATE … WHERE` — counts come from rowcount, so already-equal values still count as modified) |
 | `replace_one(collection, filter, doc)` → `UpdateResult` | ✅ Done (SQLite leg; full-document replace — absent doc fields become `NULL`, primary-key columns preserved and rejected in `doc`; never upserts) |
-| Delete, schema, transactions, raw queries | ⬜ Not started |
+| `delete_one(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; full filter DSL; deletes the first match only) |
+| `delete_many(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the collection) |
+| Schema, transactions, raw queries | ⬜ Not started |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
@@ -74,7 +77,8 @@ asyncio.run(main())
 ```
 
 Once a table exists (create one with plain SQL — `create_collection()` is a
-later build step, §1.6), the full Create/Read/Update surface works against it:
+later build step, §1.6), the full Create/Read/Update/Delete surface works
+against it:
 
 ```python
 await db.insert_one("users", {"name": "ada", "age": 36})

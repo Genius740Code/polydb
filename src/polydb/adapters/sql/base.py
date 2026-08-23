@@ -38,7 +38,8 @@ class SqlAdapter(BaseAdapter):
     behind one class, differing only by ``self.dialect``.
 
     Connection management (§1.1), the Create operations (§1.2), the Read
-    operations (§1.3), and the Update operations (§1.4) are implemented.
+    operations (§1.3), the Update operations (§1.4), and the Delete
+    operations (§1.5) are implemented.
     Everything else raises ``NotImplementedError`` with a pointer to the build
     order — this is intentional scope for the current step, not a bug.
     """
@@ -619,13 +620,70 @@ class SqlAdapter(BaseAdapter):
             matched_count=1, modified_count=modified_count
         )
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.5 Delete -----------------------------------------------------------------
 
     async def delete_one(self, collection: str, filter: dict[str, Any]) -> DeleteResult:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="delete_one"))
+        """Delete the first document matching ``filter``. See BaseAdapter.delete_one.
+
+        Targets exactly the first matching row (Mongo ``delete_one``
+        semantics): the row's ``rowid`` is resolved first, then the DELETE
+        runs against that single handle, so co-filters that also match other
+        rows leave them untouched. No match → no write,
+        ``deleted_count=0``.
+
+        Raises:
+            InvalidFilterError: Malformed filter.
+            PolydbQueryError: The driver rejected the statement (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        where_sql, where_params = self._compiler.compile_where(filter)  # 2. translate
+
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                f"SELECT rowid FROM {table}{where_sql} LIMIT 1", where_params
+            )
+            matched_row = await cursor.fetchone()
+            if matched_row is None:
+                return DeleteResult(deleted_count=0)
+            await self._conn.execute(
+                f"DELETE FROM {table} "
+                f"WHERE rowid = {self.dialect.placeholder}",
+                [matched_row[0]],
+            )
+            deleted_count = 1
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("delete_one", collection, err)
+        return DeleteResult(deleted_count=deleted_count)  # 5. result type
 
     async def delete_many(self, collection: str, filter: dict[str, Any]) -> DeleteResult:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="delete_many"))
+        """Delete every document matching ``filter``. See BaseAdapter.delete_many.
+
+        One parameterized ``DELETE … WHERE …`` statement; an empty filter
+        compiles to a bare ``DELETE FROM`` and clears the whole table, the
+        same way Mongo's ``delete_many({})`` empties a collection.
+        ``deleted_count`` comes from the statement's rowcount.
+
+        Raises:
+            InvalidFilterError: Malformed filter.
+            PolydbQueryError: The driver rejected the statement (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        where_sql, where_params = self._compiler.compile_where(filter)  # 2. translate
+
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                f"DELETE FROM {table}{where_sql}", where_params
+            )
+            deleted_count = max(cursor.rowcount, 0)  # rowcount is -1 when undeterminable
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("delete_many", collection, err)
+        return DeleteResult(deleted_count=deleted_count)  # 5. result type
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     async def create_collection(self, name: str, schema: Schema | None = None) -> None:
         raise NotImplementedError(_NOT_BUILT_YET.format(name="create_collection"))

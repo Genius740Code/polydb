@@ -30,12 +30,13 @@ which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
 (`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), #6
 (`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), #9 (`upsert_one`),
 #10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
-`aggregate`, backed by the shared `sql_compiler.py` filter translator), and #15–#17 (the
+`aggregate`, backed by the shared `sql_compiler.py` filter translator), #15–#17 (the
 full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by the new
-`compile_update_set` §2.4 update-operator translator) are done for the SQLite leg (the
+`compile_update_set` §2.4 update-operator translator), and #18–#19 (the full §1.5 Delete
+surface: `delete_one`, `delete_many`) are done for the SQLite leg (the
 only live connection so far); everything else is not started.
 
-**Progress summary: 17 / 28 features implemented (61%).**
+**Progress summary: 19 / 28 features implemented (68%).**
 
 ### 1.1 Connection management
 
@@ -78,8 +79,8 @@ only live connection so far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 18 | `async def delete_one(self, collection: str, filter: dict) -> DeleteResult` | Delete first match. | ✅ | ✅ | ✅ | ⬜ Not started |
-| 19 | `async def delete_many(self, collection: str, filter: dict) -> DeleteResult` | Delete all matches. | ✅ | ✅ | ✅ | ⬜ Not started |
+| 18 | `async def delete_one(self, collection: str, filter: dict) -> DeleteResult` | Delete first match. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 filter DSL via the shared compiler; first match targeted by rowid; no match writes nothing) |
+| 19 | `async def delete_many(self, collection: str, filter: dict) -> DeleteResult` | Delete all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the table like Mongo's `delete_many({})`; count from rowcount) |
 
 ### 1.6 Schema / structure
 

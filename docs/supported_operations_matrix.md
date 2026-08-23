@@ -12,7 +12,7 @@ Mirrors planning-doc §1. Two independent legends:
 
 - ⬜ Not started · 🔨 In progress · ✅ Done
 
-**Progress summary: 17 / 28 features implemented (61%).** All completed work is
+**Progress summary: 19 / 28 features implemented (68%).** All completed work is
 on the SQLite leg of the SQL family — the only backend whose `connect()` opens
 (see [connection.md](connection.md) for scheme resolution). Postgres, Mongo,
 and MySQL resolve to their adapter instances but their methods raise
@@ -59,8 +59,8 @@ and MySQL resolve to their adapter instances but their methods raise
 
 | # | Signature | Postgres | Mongo | SQL family | Status |
 | --- | --- | --- | --- | --- | --- |
-| 18 | `async def delete_one(collection, filter) -> DeleteResult` | ✅ | ✅ | ✅ | ⬜ Not started |
-| 19 | `async def delete_many(collection, filter) -> DeleteResult` | ✅ | ✅ | ✅ | ⬜ Not started |
+| 18 | `async def delete_one(collection, filter) -> DeleteResult` | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full filter DSL; first match targeted by rowid; no match writes nothing) |
+| 19 | `async def delete_many(collection, filter) -> DeleteResult` | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the table like Mongo's `delete_many({})`; count from rowcount) |
 
 ## 1.6 Schema / structure
 
