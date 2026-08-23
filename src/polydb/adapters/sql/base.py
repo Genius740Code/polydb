@@ -58,8 +58,8 @@ class SqlAdapter(BaseAdapter):
 
     Connection management (§1.1), the Create operations (§1.2), the Read
     operations (§1.3), the Update operations (§1.4), the Delete
-    operations (§1.5), and the collection-lifecycle half of Schema/structure
-    (§1.6 #20–#22) are implemented.
+    operations (§1.5), and all of Schema/structure (§1.6 #20–#24) are
+    implemented.
     Everything else raises ``NotImplementedError`` with a pointer to the build
     order — this is intentional scope for the current step, not a bug.
     """
@@ -828,17 +828,111 @@ class SqlAdapter(BaseAdapter):
             await self._rollback_and_raise("list_collections", "*", err)
         return [row[0] for row in rows]  # 5. normalize + return
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.6 Schema / structure (#23–#24) --------------------------------------------
+
+    def _derived_index_name(
+        self, raw_table: str, columns: list[str], unique: bool
+    ) -> str:
+        """Deterministic index name: ``[uq_|idx_]<table>__<col1>__<col2>``.
+
+        The name embeds the table so indexes on different tables never collide,
+        and the column list so re-issuing the same ``create_index`` call maps
+        to the same object — which is what makes ``IF NOT EXISTS`` idempotence
+        meaningful.
+        """
+        prefix = "uq" if unique else "idx"
+        joined = "__".join(columns)
+        return f"{prefix}_{raw_table}__{joined}"
 
     async def create_index(
         self, collection: str, fields: list[str], *, unique: bool = False
     ) -> None:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="create_index"))
+        """Create an index over ``fields``. See BaseAdapter.create_index.
+
+        Compiles to one ``CREATE [UNIQUE] INDEX`` statement. The index name is
+        derived deterministically from the table and field list
+        (``idx_users__age__score``, ``uq_…`` for ``unique=True``), and creation
+        is ``IF NOT EXISTS``-idempotent — re-creating an identical index is a
+        no-op, matching Mongo's ``createIndex``. Caveat of the derived name:
+        a *different* spec that hashes to the same name is silently ignored by
+        ``IF NOT EXISTS`` rather than raising.
+
+        An empty ``fields`` list cannot define an index and raises
+        ``InvalidFilterError``. Indexing a column the table lacks surfaces as
+        ``PolydbQueryError`` from the driver ("no such column").
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            InvalidFilterError: Bad collection/field name or empty ``fields``.
+            PolydbQueryError: The driver rejected the DDL (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        if not fields:
+            raise InvalidFilterError(
+                "create_index requires at least one field to index"
+            )
+        raw_table = _validate_identifier(collection, "table")
+        table = self._quote_ident(raw_table)
+        columns = self._validated_columns(fields)  # 2. translate
+        index_name = self._quote_ident(
+            self._derived_index_name(raw_table, columns, unique)
+        )
+        unique_sql = "UNIQUE " if unique else ""
+        column_sql = ", ".join(self._quote_ident(c) for c in columns)
+        sql = (
+            f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} "
+            f"ON {table} ({column_sql})"
+        )
+
+        try:  # 3. execute
+            await self._conn.execute(sql)
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("create_index", collection, err)
+        # 5. result type — None by contract
 
     async def add_field(
         self, collection: str, field: str, type_: Any, default: Any = None
     ) -> None:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="add_field"))
+        """Add a column to the table behind ``collection``. See BaseAdapter.add_field.
+
+        Compiles to ``ALTER TABLE … ADD COLUMN`` with the same type mapping as
+        ``create_collection`` (§1.6 #20). New columns are always nullable; a
+        non-``None`` scalar ``default`` becomes a ``DEFAULT`` clause that also
+        backfills existing rows. SQLite forbids adding ``PRIMARY KEY`` /
+        ``UNIQUE`` columns via ALTER TABLE, so those constraints are not part
+        of this method's contract.
+
+        Adding an already-existing column or targeting an absent table
+        surfaces as ``PolydbQueryError`` from the driver.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            InvalidFilterError: Bad collection/column name, non-scalar default,
+                or a ``type_`` that is not a ``FieldType``.
+            PolydbQueryError: The driver rejected the DDL (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        column = self._quote_ident(_validate_identifier(field, "column"))
+        if not isinstance(type_, FieldType):  # 2. translate
+            raise InvalidFilterError(
+                f"add_field got unsupported field type {type_!r}; use a "
+                f"polydb.schema.FieldType value"
+            )
+        parts = [column, _FIELD_TYPE_TO_SQL[type_]]
+        if default is not None:
+            parts.append(f"DEFAULT {self._default_sql_literal(default)}")
+        sql = f"ALTER TABLE {table} ADD COLUMN {' '.join(parts)}"
+
+        try:  # 3. execute
+            await self._conn.execute(sql)
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("add_field", collection, err)
+        # 5. result type — None by contract
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     def transaction(self) -> Transaction:
         raise NotImplementedError(_NOT_BUILT_YET.format(name="transaction"))

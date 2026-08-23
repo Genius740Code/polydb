@@ -12,7 +12,7 @@ Mirrors planning-doc §1. Two independent legends:
 
 - ⬜ Not started · 🔨 In progress · ✅ Done
 
-**Progress summary: 22 / 28 features implemented (79%).** All completed work is
+**Progress summary: 24 / 28 features implemented (86%).** All completed work is
 on the SQLite leg of the SQL family — the only backend whose `connect()` opens
 (see [connection.md](connection.md) for scheme resolution). Postgres, Mongo,
 and MySQL resolve to their adapter instances but their methods raise
@@ -69,8 +69,8 @@ and MySQL resolve to their adapter instances but their methods raise
 | 20 | `async def create_collection(name, schema=None) -> None` | ✅ required (`schema=None` raises `SchemaRequiredError`) | ✅ `schema` ignored with a logged info note | ✅ required, same as Postgres | ✅ Done (SQLite leg; Schema→`CREATE TABLE` compiler — `schema=None` or zero-field raises `SchemaRequiredError`; str/int/float/bool native types, datetime/json as TEXT (ISO-8601 / serialized JSON); nullable/default/primary_key/unique enforced by the DDL, `INTEGER PRIMARY KEY` aliases rowid so `inserted_id` works; existing name → `PolydbQueryError`) |
 | 21 | `async def drop_collection(name) -> None` | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `DROP TABLE IF EXISTS`, idempotent no-op on absent names) |
 | 22 | `async def list_collections() -> list[str]` | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; sorted user tables from `sqlite_master`, excluding `sqlite_*` internals and views) |
-| 23 | `async def create_index(collection, fields, *, unique=False) -> None` | ✅ | ✅ | ✅ | ⬜ Not started |
-| 24 | `async def add_field(collection, field, type_, default=None) -> None` | ✅ | 🟡 no-op + logged warning (docs are dynamic) | ✅ | ⬜ Not started |
+| 23 | `async def create_index(collection, fields, *, unique=False) -> None` | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `CREATE [UNIQUE] INDEX` with deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex` — caveat: a different spec colliding on the derived name is silently ignored; empty field list → `InvalidFilterError`; missing column/table → `PolydbQueryError`) |
+| 24 | `async def add_field(collection, field, type_, default=None) -> None` | ✅ | 🟡 no-op + logged warning (docs are dynamic) | ✅ | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same type mapping as #20; non-None scalar default becomes a DDL `DEFAULT` that backfills existing rows; new columns always nullable — SQLite forbids PK/UNIQUE via ALTER TABLE; duplicate column / absent table → `PolydbQueryError`, bad name/type/default → `InvalidFilterError`) |
 
 ## 1.7 Transactions
 

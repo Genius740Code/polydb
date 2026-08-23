@@ -16,10 +16,10 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **22 / 28 features implemented (79%)**, all on the
+Planned, not fully built: **24 / 28 features implemented (86%)**, all on the
 SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
 §1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
-#20–#22). The full per-backend matrix
+#20–#24). The full per-backend matrix
 lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
@@ -44,7 +44,9 @@ lives in
 | `create_collection(name, schema=None)` | ✅ Done (SQLite leg; Schema→`CREATE TABLE` compiler — schema required (`SchemaRequiredError` otherwise); str/int/float/bool native types, datetime/json stored as TEXT; nullable/default/primary_key/unique enforced by the DDL) |
 | `drop_collection(name)` | ✅ Done (SQLite leg; idempotent — dropping an absent name is a silent no-op) |
 | `list_collections()` → `list[str]` | ✅ Done (SQLite leg; sorted user tables, `sqlite_*` internals and views excluded) |
-| Indexes, `add_field`, transactions, raw queries | ⬜ Not started |
+| `create_index(collection, fields, *, unique=False)` | ✅ Done (SQLite leg; `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex`; empty field list raises) |
+| `add_field(collection, field, type_, default=None)` | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same type mapping as `create_collection`; non-None scalar default becomes a `DEFAULT` clause that backfills existing rows; new columns always nullable) |
+| Transactions, raw queries | ⬜ Not started |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.

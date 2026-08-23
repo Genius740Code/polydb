@@ -207,3 +207,157 @@ async def test_list_collections_before_connect_raises(tmp_path):
     database = Database.from_url(f"sqlite:///{tmp_path}/guard.db")
     with pytest.raises(ConnectionNotOpenError):
         await database.list_collections()
+
+
+# -- §1.6 #23: create_index ----------------------------------------------------------
+
+
+def _plain_schema() -> Schema:
+    # No unique constraints — index tests build their own uniqueness.
+    return Schema(
+        fields=[
+            Field(name="id", type=FieldType.INT, primary_key=True),
+            Field(name="name", type=FieldType.STR),
+            Field(name="age", type=FieldType.INT),
+        ]
+    )
+
+
+async def _index_names(db, table: str) -> list[str]:
+    cursor = await db._adapter._conn.execute(f"PRAGMA index_list({table})")
+    rows = await cursor.fetchall()
+    return [row[1] for row in rows]
+
+
+async def test_create_index_creates_composite_index(db):
+    await db.create_collection("users", _plain_schema())
+    await db.create_index("users", ["age", "name"])
+
+    assert "idx_users__age__name" in await _index_names(db, "users")
+
+
+async def test_create_index_unique_prefixes_name_and_enforces_uniqueness(db):
+    await db.create_collection("users", _plain_schema())
+    row = {"id": 1, "name": "alice", "age": 30}
+    await db.insert_one("users", row)
+
+    await db.create_index("users", ["name"], unique=True)
+    assert "uq_users__name" in await _index_names(db, "users")
+
+    with pytest.raises(PolydbQueryError):
+        await db.insert_one("users", {**row, "id": 2})  # duplicate indexed name
+
+
+async def test_create_index_recreating_identical_index_is_idempotent(db):
+    await db.create_collection("users", _plain_schema())
+    await db.create_index("users", ["age"])
+    await db.create_index("users", ["age"])  # Mongo createIndex parity: no-op
+
+    names = await _index_names(db, "users")
+    assert names.count("idx_users__age") == 1
+
+
+async def test_create_index_empty_fields_raises(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(InvalidFilterError):
+        await db.create_index("users", [])
+
+
+async def test_create_index_invalid_field_name_rejected(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(InvalidFilterError):
+        await db.create_index("users", ["not ok"])
+
+
+async def test_create_index_missing_column_raises(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(PolydbQueryError):
+        await db.create_index("users", ["ghost_column"])
+
+
+async def test_create_index_missing_table_raises(db):
+    with pytest.raises(PolydbQueryError):
+        await db.create_index("never_created", ["age"])
+
+
+async def test_create_index_before_connect_raises(tmp_path):
+    database = Database.from_url(f"sqlite:///{tmp_path}/guard.db")
+    with pytest.raises(ConnectionNotOpenError):
+        await database.create_index("users", ["age"])
+
+
+# -- §1.6 #24: add_field ---------------------------------------------------------------
+
+
+async def test_add_field_adds_usable_column(db):
+    await db.create_collection("users", _plain_schema())
+    await db.insert_one("users", {"id": 1, "name": "alice", "age": 30})
+
+    await db.add_field("users", "email", FieldType.STR)
+
+    doc = await db.find_one("users", {"id": 1})
+    assert doc["email"] is None  # existing rows read NULL in the new column
+
+    await db.update_one("users", {"id": 1}, {"$set": {"email": "a@x.com"}})
+    assert (await db.find_one("users", {"id": 1}))["email"] == "a@x.com"
+
+
+async def test_add_field_default_backfills_existing_rows(db):
+    await db.create_collection("users", _plain_schema())
+    await db.insert_many(
+        "users",
+        [
+            {"id": 1, "name": "alice", "age": 30},
+            {"id": 2, "name": "bob", "age": 40},
+        ],
+    )
+
+    await db.add_field("users", "score", FieldType.FLOAT, default=0.5)
+
+    docs = await db.find("users", {"score": 0.5})
+    assert [d["id"] for d in docs] == [1, 2]  # both backfilled
+
+
+async def test_add_field_bool_default_renders_as_0_1(db):
+    await db.create_collection("users", _plain_schema())
+    await db.add_field("users", "active", FieldType.BOOL, default=True)
+
+    await db.insert_one("users", {"id": 1, "name": "a", "age": 1})
+    assert (await db.find_one("users", {"id": 1}))["active"] == 1
+
+
+async def test_add_field_duplicate_column_raises(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(PolydbQueryError):
+        await db.add_field("users", "name", FieldType.STR)
+
+
+async def test_add_field_missing_table_raises(db):
+    with pytest.raises(PolydbQueryError):
+        await db.add_field("never_created", "email", FieldType.STR)
+
+
+async def test_add_field_invalid_column_name_rejected(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(InvalidFilterError):
+        await db.add_field("users", "not ok", FieldType.STR)
+
+
+async def test_add_field_non_scalar_default_rejected(db):
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(InvalidFilterError):
+        await db.add_field("users", "payload", FieldType.JSON, default={"k": 1})
+
+
+async def test_add_field_raw_string_type_rejected(db):
+    # FieldType is a str Enum but hash-identifies by identity — a bare "str"
+    # must not silently pass as a type.
+    await db.create_collection("users", _plain_schema())
+    with pytest.raises(InvalidFilterError):
+        await db.add_field("users", "s", "str")
+
+
+async def test_add_field_before_connect_raises(tmp_path):
+    database = Database.from_url(f"sqlite:///{tmp_path}/guard.db")
+    with pytest.raises(ConnectionNotOpenError):
+        await database.add_field("users", "email", FieldType.STR)
