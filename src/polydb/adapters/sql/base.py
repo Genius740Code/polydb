@@ -13,6 +13,8 @@ from polydb.exceptions import (
     InvalidFilterError,
     PolydbQueryError,
     SchemaRequiredError,
+    TransactionInactiveError,
+    UnsupportedOperationError,
 )
 from polydb.results import DeleteResult, InsertManyResult, InsertResult, UpdateResult, UpsertResult
 from polydb.schema import FieldType, Schema
@@ -52,14 +54,138 @@ def _sqlite_regexp(pattern: Any, value: Any) -> bool:
     return re.search(str(pattern), str(value)) is not None
 
 
+class SqlTransaction(Transaction):
+    """SQLite-leg ``Transaction`` (§1.7 #25–#26).
+
+    One explicit ``BEGIN`` … ``COMMIT``/``ROLLBACK`` block on the adapter's
+    single connection. Entering the context manager issues the ``BEGIN``;
+    while it is open every operation routed through this object — and any
+    call made directly on the adapter, which shares the same connection —
+    executes *inside* the block because per-operation commits
+    (``SqlAdapter._commit_write``) are suppressed until the transaction ends.
+
+    A failed statement inside the transaction aborts the whole thing: the
+    connection is rolled back immediately and the handle is marked aborted,
+    so subsequent calls through it raise ``TransactionInactiveError`` rather
+    than silently continuing in autocommit mode. This mirrors how a poisoned
+    Postgres transaction behaves; SQLite has no savepoint escape hatch here.
+
+    State machine: ``new → active → committed | rolled_back | aborted``.
+    """
+
+    def __init__(self, adapter: SqlAdapter) -> None:
+        self._adapter = adapter
+        self._state = "new"
+
+    async def __aenter__(self) -> Transaction:
+        if self._state != "new":
+            raise TransactionInactiveError(
+                f"this Transaction was already used (state: {self._state}); "
+                f"call db.transaction() again for a fresh one"
+            )
+        conn = self._adapter._conn
+        if conn.in_transaction:
+            raise PolydbQueryError(
+                "cannot BEGIN: the connection already has a pending "
+                "transaction that polydb did not open"
+            )
+        try:
+            await conn.execute("BEGIN")
+        except Exception as err:
+            raise PolydbQueryError(
+                f"{self._adapter.dialect.name} BEGIN failed: {err}"
+            ) from err
+        self._state = "active"
+        self._adapter._tx = self
+        return self
+
+    async def commit(self) -> None:
+        """Explicitly commit the transaction. See BaseAdapter/Transaction.commit."""
+        if self._state != "active":
+            raise TransactionInactiveError(
+                f"commit() requires an active transaction; current state is "
+                f"{self._state!r}"
+            )
+        try:
+            await self._adapter._conn.commit()
+        finally:
+            self._finish("committed")
+
+    async def rollback(self) -> None:
+        """Explicitly roll back the transaction. See Transaction.rollback."""
+        if self._state != "active":
+            raise TransactionInactiveError(
+                f"rollback() requires an active transaction; current state "
+                f"is {self._state!r}"
+            )
+        try:
+            await self._adapter._conn.rollback()
+        finally:
+            self._finish("rolled_back")
+
+    def _finish(self, state: str) -> None:
+        """Record the end state and detach from the adapter."""
+        self._state = state
+        if self._adapter._tx is self:
+            self._adapter._tx = None
+
+    def abort(self) -> None:
+        """Mark the transaction dead after a failed statement inside it.
+
+        Called by ``SqlAdapter._rollback_and_raise``, which owns the actual
+        connection rollback — this only flips state so later calls through
+        the handle refuse instead of continuing outside the (now gone)
+        transaction.
+        """
+        self._state = "aborted"
+        if self._adapter._tx is self:
+            self._adapter._tx = None
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate every adapter operation to the wrapped adapter.
+
+        Only fires for attributes not defined on the class itself, so
+        ``commit`` / ``rollback`` / ``__aenter__`` / ``__aexit__`` stay local.
+        Operations are refused unless the transaction is currently active,
+        which blocks both pre-enter usage and post-finalize usage.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if self.__dict__.get("_state") != "active":
+            raise TransactionInactiveError(
+                f"{name}() requires an active transaction — enter it first "
+                f"via `async with db.transaction() as tx:` (current state: "
+                f"{self.__dict__.get('_state', 'new')!r})"
+            )
+        return getattr(self._adapter, name)
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._state != "active":
+            # Already finalized (explicit commit/rollback inside the body) or
+            # aborted by a failed statement — there is nothing left to commit
+            # or roll back, so exiting cleanly is the correct no-op either way.
+            return
+        if exc_type is None:
+            await self.commit()
+            return
+        try:
+            await self.rollback()
+        except Exception as cleanup_error:
+            logger.warning(
+                "Ignoring rollback failure while handling an error in the "
+                "transaction body: %s",
+                cleanup_error,
+            )
+
+
 class SqlAdapter(BaseAdapter):
     """SQL-generic adapter: SQLite (via ``aiosqlite``) and MySQL (via ``asyncmy``)
     behind one class, differing only by ``self.dialect``.
 
     Connection management (§1.1), the Create operations (§1.2), the Read
     operations (§1.3), the Update operations (§1.4), the Delete
-    operations (§1.5), and all of Schema/structure (§1.6 #20–#24) are
-    implemented.
+    operations (§1.5), all of Schema/structure (§1.6 #20–#24), and
+    Transactions (§1.7 #25–#26, SQLite leg) are implemented.
     Everything else raises ``NotImplementedError`` with a pointer to the build
     order — this is intentional scope for the current step, not a bug.
     """
@@ -69,6 +195,7 @@ class SqlAdapter(BaseAdapter):
         self.dialect: Dialect = DIALECTS[config.dialect]  # type: ignore[index]
         self._compiler = SqlCompiler(self.dialect)
         self._conn: Any = None  # aiosqlite.Connection once connected
+        self._tx: SqlTransaction | None = None  # open transaction handle, if any
 
         if config.dialect == "sqlite" and not self.dialect.supports_pool and config.pool_size != _DEFAULT_POOL_SIZE:
             logger.warning(
@@ -184,18 +311,35 @@ class SqlAdapter(BaseAdapter):
         ``isolation_level=""``), so every successful write must be committed
         explicitly or the data stays uncommitted until some future commit —
         including surviving only in-memory for ``:memory:`` connections.
+
+        Inside an open user transaction (§1.7) the commit is deferred to the
+        transaction's own ``COMMIT`` — per-operation commits must never break
+        the group's atomicity.
         """
+        if self._tx is not None:
+            return
         await self._conn.commit()
 
     async def _rollback_and_raise(
         self, operation: str, collection: str, err: Exception
     ) -> NoReturn:
-        """Roll back the open implicit transaction and re-raise as PolydbQueryError.
+        """Roll back the open transaction and re-raise as PolydbQueryError.
 
         Without the rollback, statements executed before the failure would stay
         pending inside the driver's transaction and silently commit as part of
         the *next* unrelated write.
+
+        When a user transaction is open, a failed statement aborts it
+        wholesale (the Postgres/Mongo poisoned-transaction precedent): the
+        whole block is rolled back here and the handle is marked aborted, so
+        later calls through it raise ``TransactionInactiveError`` instead of
+        silently continuing in autocommit mode.
         """
+        if self._tx is not None:
+            logger.info(
+                "Aborting open transaction after failed %s on %r", operation, collection
+            )
+            self._tx.abort()
         try:
             await self._conn.rollback()
         except Exception as rollback_error:  # pragma: no cover - defensive
@@ -932,10 +1076,45 @@ class SqlAdapter(BaseAdapter):
             await self._rollback_and_raise("add_field", collection, err)
         # 5. result type — None by contract
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.7 Transactions ------------------------------------------------------------
 
     def transaction(self) -> Transaction:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="transaction"))
+        """Open a transaction (§1.7 #25). See ``SqlTransaction`` for semantics.
+
+        Use as::
+
+            async with db.transaction() as tx:
+                await tx.insert_one("users", {...})
+                await tx.update_many("users", {...}, {"$set": {...}})
+
+        Every operation routed through the yielded handle — and any call made
+        directly on the adapter while the block is open, since both share the
+        one underlying connection — commits atomically on clean exit and rolls
+        back wholesale if an exception escapes the block or any statement
+        inside fails.
+
+        SQLite caveat (documented, not hidden): a single-writer file means
+        transactions *serialize* rather than truly isolate under concurrency;
+        do not run concurrent tasks against one adapter while a transaction is
+        open.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            UnsupportedOperationError: A transaction is already open on this
+                adapter (nested/concurrent transactions are not supported).
+
+        Returns:
+            A fresh, un-entered ``SqlTransaction`` handle.
+        """
+        self._ensure_connected()
+        if self._tx is not None:
+            raise UnsupportedOperationError(
+                "nested/concurrent transactions are not supported: this "
+                "adapter already has an open transaction"
+            )
+        return SqlTransaction(self)
+
+    # -- everything below: not built yet (see class docstring) --------------------
 
     async def raw(self, query: Any, params: Any = None) -> Any:
         raise NotImplementedError(_NOT_BUILT_YET.format(name="raw"))

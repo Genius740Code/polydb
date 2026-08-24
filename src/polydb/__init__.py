@@ -8,6 +8,7 @@ from polydb.exceptions import (
     PolydbError,
     PolydbQueryError,
     SchemaRequiredError,
+    TransactionInactiveError,
     TransactionsUnavailableError,
     UnsupportedOperationError,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "UnsupportedOperationError",
     "SchemaRequiredError",
     "TransactionsUnavailableError",
+    "TransactionInactiveError",
     "PolydbQueryError",
     "InvalidConnectionStringError",
     "InvalidFilterError",

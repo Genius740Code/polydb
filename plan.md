@@ -35,10 +35,11 @@ full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by
 `compile_update_set` §2.4 update-operator translator), #18–#19 (the full §1.5 Delete
 surface: `delete_one`, `delete_many`), and #20–#24 (all of §1.6 Schema/structure:
 `create_collection`, `drop_collection`, `list_collections`, `create_index`,
-`add_field`) are done for the SQLite leg (the
+`add_field`), and #25–#26 (the full §1.7 Transactions surface:
+`transaction()` + `Transaction.commit()`/`rollback()`) are done for the SQLite leg (the
 only live connection so far); everything else is not started.
 
-**Progress summary: 24 / 28 features implemented (86%).**
+**Progress summary: 26 / 28 features implemented (93%).**
 
 ### 1.1 Connection management
 
@@ -98,8 +99,8 @@ only live connection so far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 25 | `async def transaction(self) -> AsyncContextManager[Transaction]` | Opens a transaction; all calls on the yielded `Transaction` object are atomic together. | ✅ Full ACID. | 🟡 Requires a replica set / Atlas (standalone Mongo has no multi-doc transactions) — raises `TransactionsUnavailableError` if the server topology doesn't support them. | ✅ Postgres/MySQL full ACID. 🟡 SQLite: single writer, transactions serialize rather than truly isolate under concurrency — documented, not hidden. | ⬜ Not started |
-| 26 | `Transaction.commit()` / `Transaction.rollback()` | Explicit control; also auto-commit/rollback on context-manager exit. | ✅ | 🟡 (see #25) | ✅ | ⬜ Not started |
+| 25 | `async def transaction(self) -> AsyncContextManager[Transaction]` | Opens a transaction; all calls on the yielded `Transaction` object are atomic together. | ✅ Full ACID. | 🟡 Requires a replica set / Atlas (standalone Mongo has no multi-doc transactions) — raises `TransactionsUnavailableError` if the server topology doesn't support them. | ✅ Postgres/MySQL full ACID. 🟡 SQLite: single writer, transactions serialize rather than truly isolate under concurrency — documented, not hidden. | ✅ Done (SQLite leg; `BEGIN` on context-manager entry, one atomic block on the adapter's single connection — per-operation commits are suppressed until the tx ends, so calls through the yielded handle *and* direct adapter calls inside the block commit/rollback together; a failed statement aborts the whole transaction (Postgres/Mongo poisoned-transaction precedent) and later calls through the handle raise the new `TransactionInactiveError`; nested/concurrent transactions raise `UnsupportedOperationError`; SQLite transactional DDL means `create_collection`/`drop_collection` roll back too) |
+| 26 | `Transaction.commit()` / `Transaction.rollback()` | Explicit control; also auto-commit/rollback on context-manager exit. | ✅ | 🟡 (see #25) | ✅ | ✅ Done (SQLite leg; explicit calls plus auto-commit on clean exit / auto-rollback when an exception escapes; a small state machine (`new → active → committed \| rolled_back \| aborted`) makes double-finalize and use-before-enter raise `TransactionInactiveError` instead of corrupting state) |
 
 ### 1.8 Escape hatch (raw queries)
 

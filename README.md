@@ -16,10 +16,10 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **24 / 28 features implemented (86%)**, all on the
+Planned, not fully built: **26 / 28 features implemented (93%)**, all on the
 SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
 §1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
-#20–#24). The full per-backend matrix
+#20–#24 + §1.7 **Transactions** #25–#26). The full per-backend matrix
 lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
@@ -46,7 +46,8 @@ lives in
 | `list_collections()` → `list[str]` | ✅ Done (SQLite leg; sorted user tables, `sqlite_*` internals and views excluded) |
 | `create_index(collection, fields, *, unique=False)` | ✅ Done (SQLite leg; `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex`; empty field list raises) |
 | `add_field(collection, field, type_, default=None)` | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same type mapping as `create_collection`; non-None scalar default becomes a `DEFAULT` clause that backfills existing rows; new columns always nullable) |
-| Transactions, raw queries | ⬜ Not started |
+| `transaction()` → `async with db.transaction() as tx:` | ✅ Done (SQLite leg; explicit `BEGIN`, one atomic block on the adapter's single connection — writes through `tx.*` (and direct adapter calls inside the block) commit together on clean exit or roll back wholesale on error; a failed statement aborts the transaction like a poisoned Postgres tx and later calls raise `TransactionInactiveError`; nested transactions raise `UnsupportedOperationError`; SQLite's single-writer file means serialization, not true isolation, under concurrency) |
+| Raw queries (`raw`, `explain`) | ⬜ Not started |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
@@ -122,6 +123,7 @@ returning an **unconnected** instance:
 - [docs/dsl_spec.md](docs/dsl_spec.md) — filter/update DSL: operators, grammar, aggregation subset, safety guarantees.
 - [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md) — per-backend support + build status for all 28 features.
 - [examples/basic_crud.py](examples/basic_crud.py) — every implemented operation, runnable against SQLite.
+- [examples/transactions.py](examples/transactions.py) — atomic multi-operation blocks: commit, rollback, cross-collection atomicity.
 - [examples/switching_backends.py](examples/switching_backends.py) — one script, three connection strings.
 - [plan.md](plan.md) — planning document: feature list, DSL spec, build order, testing strategy.
 

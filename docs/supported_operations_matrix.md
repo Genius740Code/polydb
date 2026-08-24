@@ -12,7 +12,7 @@ Mirrors planning-doc §1. Two independent legends:
 
 - ⬜ Not started · 🔨 In progress · ✅ Done
 
-**Progress summary: 24 / 28 features implemented (86%).** All completed work is
+**Progress summary: 26 / 28 features implemented (93%).** All completed work is
 on the SQLite leg of the SQL family — the only backend whose `connect()` opens
 (see [connection.md](connection.md) for scheme resolution). Postgres, Mongo,
 and MySQL resolve to their adapter instances but their methods raise
@@ -76,8 +76,8 @@ and MySQL resolve to their adapter instances but their methods raise
 
 | # | Signature | Postgres | Mongo | SQL family | Status |
 | --- | --- | --- | --- | --- | --- |
-| 25 | `async def transaction() -> Transaction` | ✅ full ACID | 🟡 requires replica set / Atlas — raises `TransactionsUnavailableError` otherwise | ✅ MySQL full ACID · 🟡 SQLite single-writer: transactions serialize rather than truly isolate under concurrency | ⬜ Not started |
-| 26 | `Transaction.commit()` / `Transaction.rollback()` | ✅ | 🟡 (see #25) | ✅ | ⬜ Not started |
+| 25 | `async def transaction() -> Transaction` | ✅ full ACID | 🟡 requires replica set / Atlas — raises `TransactionsUnavailableError` otherwise | ✅ MySQL full ACID · 🟡 SQLite single-writer: transactions serialize rather than truly isolate under concurrency | ✅ Done (SQLite leg; explicit `BEGIN` on context-manager entry, one atomic block on the adapter's single connection — per-operation commits suppressed until the tx ends, so calls through the yielded handle and direct adapter calls inside the block commit/rollback together; a failed statement aborts the whole transaction (poisoned-tx precedent) and later calls through the handle raise `TransactionInactiveError`; nested/concurrent transactions raise `UnsupportedOperationError`; SQLite transactional DDL rolls back too) |
+| 26 | `Transaction.commit()` / `Transaction.rollback()` | ✅ | 🟡 (see #25) | ✅ | ✅ Done (SQLite leg; explicit control plus auto-commit/rollback on context exit; state machine (`new → active → committed \| rolled_back \| aborted`) makes double-finalize and use-before-enter raise `TransactionInactiveError`) |
 
 ## 1.8 Escape hatch (raw queries)
 

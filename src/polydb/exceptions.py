@@ -21,6 +21,15 @@ class TransactionsUnavailableError(PolydbError):
     """Raised when transaction() is called on a topology that doesn't support transactions."""
 
 
+class TransactionInactiveError(PolydbError):
+    """Raised when a call is made through a Transaction that is not active.
+
+    Covers operations attempted before the transaction was entered
+    (``async with``), after it was committed/rolled back, or after a failed
+    statement inside it aborted the whole transaction.
+    """
+
+
 class PolydbQueryError(PolydbError):
     """Raised when a native driver query fails. Wraps the original driver exception."""
 
