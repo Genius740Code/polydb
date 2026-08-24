@@ -171,6 +171,28 @@ async def delete_demo(db: Database) -> None:
     print(f"delete_many     -> deleted={result.deleted_count}")
 
 
+async def raw_demo(db: Database) -> None:
+    print("-- escape hatch " + "-" * 46)
+
+    # raw() opts out of the abstraction: plain SQL, positional or :named
+    # parameters, rows back as plain dicts.
+    rows = await db.raw(
+        "SELECT customer, amount FROM orders WHERE region = :region ORDER BY id",
+        {"region": "UK"},
+    )
+    print(f"raw (named)     -> {rows}")
+
+    # Writes through raw() are committed like any polydb write...
+    await db.raw(
+        "UPDATE orders SET status = ? WHERE amount < ?", ["cheap", 100]
+    )
+
+    # ...and explain() shows the plan of what find()'s filter compiles to.
+    plan = await db.explain("orders", {"status": "open"})
+    print(f"explain         -> {plan['sql']}")
+    print(f"                  {plan['plan'][0]['detail']}")
+
+
 async def main() -> None:
     # A temp file keeps repeat runs clean; sqlite:///:memory: works too.
     with tempfile.TemporaryDirectory() as tmp:
@@ -183,6 +205,7 @@ async def main() -> None:
             await read_demo(db)
             await update_demo(db)
             await delete_demo(db)
+            await raw_demo(db)
 
 
 if __name__ == "__main__":

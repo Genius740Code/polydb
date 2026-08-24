@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, NoReturn
 
 from polydb.adapters.sql.dialects import DIALECTS, Dialect
@@ -21,8 +21,6 @@ from polydb.schema import FieldType, Schema
 from polydb.url_parser import ConnectionConfig, _DEFAULT_POOL_SIZE
 
 logger = logging.getLogger("polydb.adapters.sql")
-
-_NOT_BUILT_YET = "{name}() is not implemented yet. See planning doc §6 build order."
 
 _validate_identifier = validate_identifier
 
@@ -184,10 +182,11 @@ class SqlAdapter(BaseAdapter):
 
     Connection management (§1.1), the Create operations (§1.2), the Read
     operations (§1.3), the Update operations (§1.4), the Delete
-    operations (§1.5), all of Schema/structure (§1.6 #20–#24), and
-    Transactions (§1.7 #25–#26, SQLite leg) are implemented.
-    Everything else raises ``NotImplementedError`` with a pointer to the build
-    order — this is intentional scope for the current step, not a bug.
+    operations (§1.5), all of Schema/structure (§1.6 #20–#24),
+    Transactions (§1.7 #25–#26, SQLite leg), and the raw-query escape
+    hatch (§1.8 #27–#28) are implemented on the SQLite leg.
+    The MySQL leg still raises ``NotImplementedError`` at ``connect()`` —
+    this is intentional scope for the current build-order step, not a bug.
     """
 
     def __init__(self, config: ConnectionConfig) -> None:
@@ -1114,10 +1113,107 @@ class SqlAdapter(BaseAdapter):
             )
         return SqlTransaction(self)
 
-    # -- everything below: not built yet (see class docstring) --------------------
+    # -- 1.8 Escape hatch (raw queries) -----------------------------------------------
+
+    @staticmethod
+    def _normalize_raw_params(params: Any) -> list[Any] | dict[str, Any]:
+        """Coerce ``raw()``'s untyped ``params`` into a driver-bindable shape.
+
+        Positional parameters pass through as an ordered list; mappings become
+        named-parameter dicts (SQLite resolves ``:name`` placeholders from
+        them). Strings and bytes are rejected even though they are sequences —
+        passing either as ``params`` is almost always a quoting mistake that
+        would silently bind per-character values.
+        """
+        if params is None:
+            return []
+        if isinstance(params, Mapping):
+            return dict(params)
+        if isinstance(params, (list, tuple)):
+            return list(params)
+        raise InvalidFilterError(
+            f"raw() params must be None, a sequence of positional values, or "
+            f"a dict of named parameters; got {type(params).__name__}"
+        )
 
     async def raw(self, query: Any, params: Any = None) -> Any:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="raw"))
+        """Execute a raw SQL statement against the driver. See BaseAdapter.raw.
+
+        This method opts *out* of the abstraction: no DSL compilation, no
+        result reshaping beyond turning rows into plain dicts, no protection
+        from SQL syntax you get wrong. ``query`` must be a non-empty SQL
+        string; ``params`` may be ``None``, a positional sequence, or a named-
+        parameter mapping (``WHERE name = :name`` style). Rows come back as
+        ``list[dict]`` — empty for statements that produce no rows.
+
+        Writes executed through ``raw()`` are committed before returning,
+        exactly like every polydb write method; inside an open transaction
+        (§1.7) the statement joins the atomic block instead and its durability
+        follows the transaction's outcome. A failing statement rolls back like
+        any other operation and surfaces as ``PolydbQueryError``.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            InvalidFilterError: ``query`` is not a non-empty string, or
+                ``params`` has an unsupported shape.
+            PolydbQueryError: The driver rejected the statement (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        if not isinstance(query, str) or not query.strip():
+            raise InvalidFilterError(
+                f"raw() requires a non-empty SQL string, got {query!r}"
+            )
+        bind_params = self._normalize_raw_params(params)  # 2. translate
+
+        try:  # 3. execute
+            cursor = await self._conn.execute(query, bind_params)
+            rows = await cursor.fetchall()
+            await self._commit_write()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("raw", "*", err)
+        return [dict(row) for row in rows]  # 5. normalize + return
 
     async def explain(self, collection: str, filter: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError(_NOT_BUILT_YET.format(name="explain"))
+        """Return SQLite's plan for the compiled ``filter``. See BaseAdapter.explain.
+
+        The filter is translated through the shared compiler exactly as
+        ``find()`` would, then run under ``EXPLAIN QUERY PLAN`` so the plan
+        describes what the abstraction actually executes — not some hand-written
+        equivalent. The result pairs the backend name, the compiled SQL and its
+        bind parameters with the native plan rows (``id`` / ``parent`` /
+        ``notused`` / ``detail``), e.g.::
+
+            {
+              "backend": "sqlite",
+              "sql": "SELECT * FROM `users` WHERE `age` > ?",
+              "params": [21],
+              "plan": [{"id": 4, "parent": 0, "notused": 0,
+                        "detail": "SCAN users"}],
+            }
+
+        Read-only — opens no write transaction and never commits.
+
+        Raises:
+            ConnectionNotOpenError: If ``connect()`` has not yet succeeded.
+            InvalidFilterError: Malformed collection name or filter DSL.
+            PolydbQueryError: No such table, or the driver rejected the
+                statement (wrapped).
+        """
+        self._ensure_connected()  # 1. guard
+        table = self._validated_table(collection)
+        query = self._compiler.compile_find(  # 2. translate
+            table, filter, sort=None, limit=None, offset=None
+        )
+        try:  # 3. execute
+            cursor = await self._conn.execute(
+                f"EXPLAIN QUERY PLAN {query.sql}", query.params
+            )
+            rows = await cursor.fetchall()
+        except Exception as err:  # 4. normalize errors
+            await self._rollback_and_raise("explain", collection, err)
+        return {  # 5. normalize + return
+            "backend": self.dialect.name,
+            "sql": query.sql,
+            "params": query.params,
+            "plan": [dict(row) for row in rows],
+        }

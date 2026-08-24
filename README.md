@@ -16,11 +16,11 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **26 / 28 features implemented (93%)**, all on the
+Planned, not fully built: **28 / 28 features implemented (100%)** on the
 SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
 §1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
-#20–#24 + §1.7 **Transactions** #25–#26). The full per-backend matrix
-lives in
+#20–#24 + §1.7 **Transactions** #25–#26 + §1.8 **Escape hatch** #27–#28). The
+full per-backend matrix lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
 | Feature | Status |
@@ -47,7 +47,8 @@ lives in
 | `create_index(collection, fields, *, unique=False)` | ✅ Done (SQLite leg; `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex`; empty field list raises) |
 | `add_field(collection, field, type_, default=None)` | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same type mapping as `create_collection`; non-None scalar default becomes a `DEFAULT` clause that backfills existing rows; new columns always nullable) |
 | `transaction()` → `async with db.transaction() as tx:` | ✅ Done (SQLite leg; explicit `BEGIN`, one atomic block on the adapter's single connection — writes through `tx.*` (and direct adapter calls inside the block) commit together on clean exit or roll back wholesale on error; a failed statement aborts the transaction like a poisoned Postgres tx and later calls raise `TransactionInactiveError`; nested transactions raise `UnsupportedOperationError`; SQLite's single-writer file means serialization, not true isolation, under concurrency) |
-| Raw queries (`raw`, `explain`) | ⬜ Not started |
+| `raw(query, params=None)` → `list[dict]` | ✅ Done (SQLite leg; escape hatch — plain SQL string, positional sequence or `:named` dict params, rows as plain dicts; no DSL compilation; writes commit like every polydb write or join an open transaction; driver failures raise `PolydbQueryError`) |
+| `explain(collection, filter)` → `dict` | ✅ Done (SQLite leg; filter compiles exactly as `find()` would, run under `EXPLAIN QUERY PLAN`; returns `{"backend", "sql", "params", "plan"}`) |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.

@@ -12,7 +12,7 @@ Mirrors planning-doc §1. Two independent legends:
 
 - ⬜ Not started · 🔨 In progress · ✅ Done
 
-**Progress summary: 26 / 28 features implemented (93%).** All completed work is
+**Progress summary: 28 / 28 features implemented (100%).** All completed work is
 on the SQLite leg of the SQL family — the only backend whose `connect()` opens
 (see [connection.md](connection.md) for scheme resolution). Postgres, Mongo,
 and MySQL resolve to their adapter instances but their methods raise
@@ -83,8 +83,8 @@ and MySQL resolve to their adapter instances but their methods raise
 
 | # | Signature | Postgres | Mongo | SQL family | Status |
 | --- | --- | --- | --- | --- | --- |
-| 27 | `async def raw(query, params=None) -> Any` | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ⬜ Not started |
-| 28 | `async def explain(collection, filter) -> dict` | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ⬜ Not started |
+| 27 | `async def raw(query, params=None) -> Any` | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ✅ Done (SQLite leg; `query` must be a non-empty SQL string — no DSL compilation; `params` may be `None`, a positional sequence, or a named-parameter mapping; rows return as `list[dict]`; writes commit like every polydb write, or join an open §1.7 transaction instead; driver failures → `PolydbQueryError`, aborting an open transaction wholesale) |
+| 28 | `async def explain(collection, filter) -> dict` | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ✅ Done (SQLite leg; filter compiles through the shared compiler exactly as `find()` would, then runs under `EXPLAIN QUERY PLAN`; returns `{"backend", "sql", "params", "plan"}` with native plan rows as dicts; read-only) |
 
 ## Filter DSL support per backend
 

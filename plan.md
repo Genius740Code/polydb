@@ -33,13 +33,14 @@ which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
 `aggregate`, backed by the shared `sql_compiler.py` filter translator), #15–#17 (the
 full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by the new
 `compile_update_set` §2.4 update-operator translator), #18–#19 (the full §1.5 Delete
-surface: `delete_one`, `delete_many`), and #20–#24 (all of §1.6 Schema/structure:
+surface: `delete_one`, `delete_many`), #20–#24 (all of §1.6 Schema/structure:
 `create_collection`, `drop_collection`, `list_collections`, `create_index`,
-`add_field`), and #25–#26 (the full §1.7 Transactions surface:
-`transaction()` + `Transaction.commit()`/`rollback()`) are done for the SQLite leg (the
-only live connection so far); everything else is not started.
+`add_field`), #25–#26 (the full §1.7 Transactions surface:
+`transaction()` + `Transaction.commit()`/`rollback()`), and #27–#28 (the full §1.8
+escape-hatch surface: `raw`, `explain`) are done for the SQLite leg (the only live
+connection so far); everything else is not started.
 
-**Progress summary: 26 / 28 features implemented (93%).**
+**Progress summary: 28 / 28 features implemented (100%).**
 
 ### 1.1 Connection management
 
@@ -106,8 +107,8 @@ only live connection so far); everything else is not started.
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 27 | `async def raw(self, query: Any, params: Any = None) -> Any` | Pass-through to the native driver. `query` is a SQL string for relational backends, a Mongo command dict for Mongo. Return type is intentionally `Any` — this method opts *out* of the abstraction. | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ⬜ Not started |
-| 28 | `async def explain(self, collection: str, filter: dict) -> dict` | Returns the backend's native query plan for a translated filter — debugging aid. | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ⬜ Not started |
+| 27 | `async def raw(self, query: Any, params: Any = None) -> Any` | Pass-through to the native driver. `query` is a SQL string for relational backends, a Mongo command dict for Mongo. Return type is intentionally `Any` — this method opts *out* of the abstraction. | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ✅ Done (SQLite leg; `query` must be a non-empty SQL string — no DSL compilation; `params` may be `None`, a positional sequence, or a named-parameter mapping (str/bytes rejected as near-certain quoting mistakes); rows return as `list[dict]`, empty for statements producing no rows; writes commit before returning exactly like every polydb write, and inside an open §1.7 transaction the statement joins the atomic block instead; a failing statement rolls back like any other operation and surfaces as `PolydbQueryError`, aborting an open transaction wholesale) |
+| 28 | `async def explain(self, collection: str, filter: dict) -> dict` | Returns the backend's native query plan for a translated filter — debugging aid. | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ✅ Done (SQLite leg; the filter compiles through the shared compiler exactly as `find()` would, then runs under `EXPLAIN QUERY PLAN` so the plan describes what the abstraction actually executes; returns `{"backend", "sql", "params", "plan"}` with the native plan rows (`id`/`parent`/`notused`/`detail`) as dicts; read-only, opens no write transaction) |
 
 ---
 
