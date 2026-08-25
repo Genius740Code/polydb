@@ -3,7 +3,10 @@
 Implements planning-doc §2. The DSL surface is Mongo-shaped because Mongo's
 operator dict is already a clean, serializable AST: the SQL family adapter
 compiles that AST into fully parameterized SQL via `polydb/compilers/sql_compiler.py`,
-while Mongo's adapter mostly passes it straight to the driver.
+while Mongo's adapter passes it through `polydb/compilers/mongo_compiler.py`,
+which validates it against this spec and normalizes the two operators Mongo
+cannot express natively (`$like`, top-level `$not`) — see
+[Mongo translation](#mongo-translation).
 
 Every method taking a `filter` argument (`find_one`, `find`, `count`, `exists`,
 `update_one`, `update_many`, `replace_one`, and `$match` stages inside
@@ -79,6 +82,28 @@ WHERE (`status` IN (?, ?) AND (`amount` >= ? AND `amount` < ?) AND ((`region` = 
   negation: `{"$or": [{}, {"a": 1}]}` matches **everything**,
   `{"$nor": [{}, {"a": 1}]}` and `{"$not": {}}` match **nothing**.
 
+## Mongo translation
+
+Every operator in this spec is a native Mongo operator except `$like`; the
+validation rules above are enforced identically on the Mongo leg, so both
+backends reject malformed filters with the same `InvalidFilterError`s before
+any driver is involved.
+
+- `$like` normalizes to an anchored regex run through `$expr` + `$regexMatch`
+  (Mongo has no native `LIKE`): `%` → `.*`, `_` → `.`, every other character
+  escaped literally, anchored with `^`/`$` so the **whole value** must match
+  — e.g. `"50%"` → `^50.*$`. The match is case-sensitive (Postgres parity;
+  MySQL/SQLite default collations would fold case). Fields whose value is
+  null/missing never match, like SQL.
+- A standalone top-level `$not` filter is rewritten as a one-element `$nor`
+  (`{"$not": {...}}` → `{"$nor": [{...}]}`), because Mongo only allows `$not`
+  as a field-level operator.
+- Known divergence from SQL: a *negated* `$like` matches documents whose
+  field is null or missing on Mongo, while SQL's three-valued logic drops
+  those rows from `NOT (… LIKE …)`.
+- Empty sub-filters stay `{}` natively — Mongo's match-everything semantics
+  survive `$or`/`$nor`/`$not` without the `1 = 1` trick the SQL leg needs.
+
 ## Safety guarantees
 
 - The compiler always emits **parameterized** SQL — user values never touch the
@@ -116,6 +141,10 @@ Constraints:
 - One column may not be assigned by two different operators in one update.
 - An update whose SET clause compiles empty (e.g. `{}`) still reports an honest
   `matched_count` with `modified_count=0`.
+
+On Mongo all four operators are native — including `$push` — so
+`MongoCompiler.compile_update()` validates with the same rules and passes the
+dict straight through to the driver.
 
 Known divergence from Mongo (documented, not hidden): `update_many` takes both
 counts from the statement's rowcount, so rows whose values were already equal

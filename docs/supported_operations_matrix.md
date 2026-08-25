@@ -93,8 +93,8 @@ design. Backend-specific translation notes:
 
 | Feature | Mongo | SQL family |
 | --- | --- | --- |
-| Comparison + logical operators | pass-through to driver | compiled by `sql_compiler.py` into parameterized SQL |
+| Comparison + logical operators | validated + passed through by `mongo_compiler.py` (standalone `$not` rewritten as one-element `$nor` — Mongo rejects top-level `$not`) | compiled by `sql_compiler.py` into parameterized SQL |
 | `$regex` | native | `REGEXP` operator — SQLite resolves it via a registered user function (`re.search` semantics); MySQL native |
-| `$like` | normalized to a regex-equivalent (Mongo has no native `LIKE`) | native `LIKE` |
-| `$push` update | native | ❌ `UnsupportedOperationError` |
-| Identifier safety | n/a (no string interpolation) | names validated against `[A-Za-z_][A-Za-z0-9_]*`, backtick-quoted on SQLite/MySQL, double-quote on Postgres |
+| `$like` | normalized to an anchored `$expr` + `$regexMatch` regex (`%` → `.*`, `_` → `.`, case-sensitive; Mongo has no native `LIKE`) | native `LIKE` |
+| `$push` update | native (validated pass-through by `mongo_compiler.py`) | ❌ `UnsupportedOperationError` |
+| Identifier safety | names validated against `[A-Za-z_][A-Za-z0-9_]*` before use | same validation, then identifier-quoted: backtick on SQLite/MySQL, double-quote on Postgres |

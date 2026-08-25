@@ -38,7 +38,10 @@ surface: `delete_one`, `delete_many`), #20–#24 (all of §1.6 Schema/structure:
 `add_field`), #25–#26 (the full §1.7 Transactions surface:
 `transaction()` + `Transaction.commit()`/`rollback()`), and #27–#28 (the full §1.8
 escape-hatch surface: `raw`, `explain`) are done for the SQLite leg (the only live
-connection so far); everything else is not started.
+connection so far); everything else is not started. The §2 DSL also has its
+Mongo-side leg now: `compilers/mongo_compiler.py` validates the shared grammar
+and normalizes `$like`/`$not` for Mongo (unit-tested in isolation; adapter
+wiring itself is still pending).
 
 **Progress summary: 28 / 28 features implemented (100%).**
 
@@ -158,6 +161,23 @@ Plain `{"status": "open"}` is shorthand for `{"status": {"$eq": "open"}}`.
 | `$or` | logical OR of sub-filters | native | `(cond) OR (cond)` |
 | `$nor` | none of the sub-filters match | native | `NOT ((cond) OR (cond))` |
 | `$not` | negation of a sub-filter | native | `NOT (cond)` |
+
+> **Implementation note (Mongo leg):** every operator above is native Mongo
+> except `$like`, so `mongo_compiler.py` passes them through unchanged after
+> validating the §2 grammar — same rules and error wording as the SQL compiler,
+> so both backends reject malformed filters with identical
+> `InvalidFilterError`s before any driver sees them. Two Mongo-forced
+> normalizations: **`$like`** becomes an anchored regex (`%` → `.*`, `_` → `.`,
+> every other character escaped literally) run through `$expr` +
+> `$regexMatch`, since Mongo has no native `LIKE` — the whole value must
+> match, and the match is case-sensitive (Postgres parity; MySQL/SQLite
+> default collations would fold case). Standalone **`$not`** is rewritten as a
+> one-element `$nor`, because Mongo only allows `$not` as a field-level
+> operator. Known divergence: a *negated* `$like` matches documents whose
+> field is null/missing on Mongo (`$regexMatch` returns `false` there), while
+> SQL's three-valued logic drops those rows from `NOT (… LIKE …)`. On §2.4,
+> Mongo keeps all four update operators natively — including `$push`, which
+> the SQL family hard-fails.
 
 ### 2.3 Worked example
 
