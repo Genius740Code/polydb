@@ -131,6 +131,14 @@ scalar        := str | int | float | bool | null | list  (list only valid with $
 
 Plain `{"status": "open"}` is shorthand for `{"status": {"$eq": "open"}}`.
 
+> **Implementation note (empty filters):** `{}` sub-filters inside
+> `$and`/`$or`/`$nor` compile to the literal `1 = 1` rather than being dropped,
+> so Mongo's "{}-matches-everything" semantics survive negation — e.g.
+> `{"$or": [{}, {"a": 1}]}` matches *everything* and `{"$nor": [{}, …]}` /
+> `{"$not": {}}` match *nothing*. An empty operator dict (`{"age": {}}`) raises
+> `InvalidFilterError`: the grammar requires at least one operator per operator
+> expr, and silently matching all rows would hide caller bugs.
+
 ### 2.2 Operator table
 
 | Operator | Meaning | Mongo | SQL translation |

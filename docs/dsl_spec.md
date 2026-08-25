@@ -30,8 +30,8 @@ An empty filter (`{}` or `None`) matches every row.
 | `$eq` | equals | `field = ?` — a `None` argument compiles to `IS NULL` |
 | `$ne` | not equals | `field <> ?` — a `None` argument compiles to `IS NOT NULL` |
 | `$gt` / `$gte` / `$lt` / `$lte` | ordered comparisons | `>`, `>=`, `<`, `<=` |
-| `$in` | value in list | `field IN (?, ?, ...)` — empty list matches **nothing** (Mongo semantics) |
-| `$nin` | value not in list | `field NOT IN (?, ?, ...)` — empty list matches **everything** |
+| `$in` | value in list | `field IN (?, ?, ...)` — empty list matches **nothing** (`0 = 1`) |
+| `$nin` | value not in list | `field NOT IN (?, ?, ...)` — empty list matches **everything** (`1 = 1`) |
 | `$exists` | field present / not present | `field IS NOT NULL` / `field IS NULL`; requires a bool |
 | `$regex` | pattern match (`re.search` semantics) | `field REGEXP ?` — SQLite resolves it through the `REGEXP` user function registered at `connect()` time; MySQL has `REGEXP` natively |
 | `$like` | SQL-style wildcard match (`%`, `_`) | `field LIKE ?` |
@@ -45,6 +45,11 @@ Rules enforced by the compiler:
 - Only `$eq`/`$ne` accept `null`. Other comparison operators raise
   `InvalidFilterError` — use `$exists` to test for missing fields.
 - A bare list value (`{"tags": ["a", "b"]}`) raises `InvalidFilterError`.
+- A filter must be a dict — anything other than `None` / `{}` (both match
+  every row) or a dict raises `InvalidFilterError`.
+- An operator dict must contain at least one operator: `{"age": {}}` raises
+  `InvalidFilterError` instead of silently matching everything (that shape is
+  almost always a bug in the caller's code).
 
 ## Logical operators
 
@@ -69,6 +74,10 @@ WHERE (`status` IN (?, ?) AND (`amount` >= ? AND `amount` < ?) AND ((`region` = 
 - `$and` / `$or` / `$nor` take a non-empty list of filter dicts; `$not` takes a
   single filter dict.
 - `$nor` compiles to `NOT ((cond) OR (cond))` — none of the sub-filters match.
+- An empty sub-filter (`{}`) matches every row, so it compiles to the literal
+  `1 = 1` instead of being dropped — that keeps Mongo's semantics through
+  negation: `{"$or": [{}, {"a": 1}]}` matches **everything**,
+  `{"$nor": [{}, {"a": 1}]}` and `{"$not": {}}` match **nothing**.
 
 ## Safety guarantees
 

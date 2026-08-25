@@ -106,7 +106,9 @@ def test_empty_in_matches_nothing(compiler):
 
 
 def test_empty_nin_matches_everything(compiler):
-    assert compiler.compile_where({"status": {"$nin": []}}) == ("", [])
+    where, params = compiler.compile_where({"status": {"$nin": []}})
+    assert where == " WHERE 1 = 1"
+    assert params == []
 
 
 def test_in_requires_list(compiler):
@@ -195,6 +197,55 @@ def test_logical_ops_require_lists(compiler):
 def test_unknown_logical_operator_rejected(compiler):
     with pytest.raises(InvalidFilterError):
         compiler.compile_where({"$xor": [{"a": 1}]})
+
+
+# -- §2.1 grammar conformance: filter / field_expr / operator_expr shapes -------------
+
+
+@pytest.mark.parametrize("bad_filter", [[], ["a"], 0, 1, False, True, "", "x", 42])
+def test_non_dict_filters_rejected(compiler, bad_filter):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_where(bad_filter)
+
+
+def test_none_and_empty_dict_still_match_all(compiler):
+    assert compiler.compile_where(None) == ("", [])
+    assert compiler.compile_where({}) == ("", [])
+
+
+def test_empty_operator_dict_rejected(compiler):
+    with pytest.raises(InvalidFilterError):
+        compiler.compile_where({"age": {}})
+
+
+def test_empty_nin_combines_with_sibling_operators(compiler):
+    where, params = compiler.compile_where({"age": {"$nin": [], "$gt": 5}})
+    assert where == " WHERE (1 = 1 AND `age` > ?)"
+    assert params == [5]
+
+
+def test_empty_subfilter_is_literal_true_in_and(compiler):
+    where, params = compiler.compile_where({"$and": [{}, {"a": 1}]})
+    assert where == " WHERE ((1 = 1) AND (`a` = ?))"
+    assert params == [1]
+
+
+def test_empty_subfilter_in_or_matches_everything(compiler):
+    where, params = compiler.compile_where({"$or": [{}, {"a": 1}]})
+    assert where == " WHERE ((1 = 1) OR (`a` = ?))"
+    assert params == [1]
+
+
+def test_empty_subfilter_in_nor_matches_nothing(compiler):
+    where, params = compiler.compile_where({"$nor": [{}, {"a": 1}]})
+    assert where == " WHERE (NOT ((1 = 1) OR (`a` = ?)))"
+    assert params == [1]
+
+
+def test_not_of_empty_filter_matches_nothing(compiler):
+    where, params = compiler.compile_where({"$not": {}})
+    assert where == " WHERE (NOT (1 = 1))"
+    assert params == []
 
 
 # -- identifier safety --------------------------------------------------------------------

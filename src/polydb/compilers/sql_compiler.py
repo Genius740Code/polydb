@@ -121,12 +121,14 @@ class SqlCompiler:
         Raises:
             InvalidFilterError: If the filter violates the §2 grammar.
         """
-        if not filter_:
+        if filter_ is None:
             return "", []
         if not isinstance(filter_, dict):
             raise InvalidFilterError(
                 f"filter must be a dict, got {type(filter_).__name__}"
             )
+        if not filter_:
+            return "", []
         clauses, params = self._compile_filter(filter_)
         if not clauses:
             return "", []
@@ -173,7 +175,12 @@ class SqlCompiler:
     def _compile_operator_expr(
         self, column: str, ops: Any
     ) -> tuple[str, list[Any]]:
-        """Compile an operator dict such as ``{"$gte": 100, "$lt": 5000}``."""
+        """Compile an operator dict such as ``{"$gte": 100, "$lt": 5000}``.
+
+        The §2.1 grammar requires at least one operator per operator dict, so
+        an empty one (``{"field": {}}``) raises rather than silently matching
+        every row — that shape is almost always a bug in the caller's code.
+        """
         if not isinstance(ops, dict):
             raise InvalidFilterError(
                 f"Value for {column} must be a scalar or an operator dict, got "
@@ -187,7 +194,10 @@ class SqlCompiler:
                 clauses.append(clause)
                 params.extend(op_params)
         if not clauses:
-            return "", []
+            raise InvalidFilterError(
+                f"operator dict for {column} must contain at least one "
+                f"operator; got {{}}"
+            )
         if len(clauses) == 1:
             return clauses[0], params
         return "(" + " AND ".join(clauses) + ")", params
@@ -220,7 +230,9 @@ class SqlCompiler:
                 )
             if not arg:
                 # Mongo semantics: $in [] matches nothing, $nin [] matches all.
-                return ("0 = 1", []) if op == "$in" else ("", [])
+                # Both compile to explicit constants so they survive being
+                # combined with sibling operators inside one dict.
+                return ("0 = 1", []) if op == "$in" else ("1 = 1", [])
             joiner = "IN" if op == "$in" else "NOT IN"
             placeholder_sql = ", ".join([self._ph] * len(arg))
             return f"{column} {joiner} ({placeholder_sql})", list(arg)
@@ -261,7 +273,14 @@ class SqlCompiler:
         return f"({clause})"
 
     def _compile_logical(self, op: str, arg: Any) -> tuple[str, list[Any]]:
-        """Compile $and/$or/$nor/$not logical expressions (§2.1 grammar)."""
+        """Compile $and/$or/$nor/$not logical expressions (§2.1 grammar).
+
+        An empty sub-filter (``{}``) is a valid filter that matches every row,
+        so it compiles to the literal ``1 = 1`` instead of being dropped —
+        dropping it would flip the meaning of ``$or``/``$nor``/``$not``
+        (e.g. ``{"$or": [{}, {"a": 1}]}`` must match *everything*, not just
+        ``a = 1``).
+        """
         if op not in _LOGICAL_OPERATORS:
             raise InvalidFilterError(f"Unsupported operator {op!r}")
 
@@ -270,7 +289,7 @@ class SqlCompiler:
                 raise InvalidFilterError("$not requires a filter dict")
             not_clauses, not_params = self._compile_filter(arg)
             if not not_clauses:
-                return "", []
+                not_clauses = ["1 = 1"]
             return (
                 "(NOT " + self._parenthesize(" AND ".join(not_clauses)) + ")"
             ), not_params
@@ -290,7 +309,7 @@ class SqlCompiler:
                 )
             clauses, sub_params = self._compile_filter(sub_filter)
             if not clauses:
-                continue  # e.g. {} — matches everything, adds no constraint
+                clauses = ["1 = 1"]
             sub_clauses.append(self._parenthesize(" AND ".join(clauses)))
             params.extend(sub_params)
 
@@ -378,7 +397,7 @@ class SqlCompiler:
 
         if not assignments:
             return "", []
-        return " SET " + ", ".join(assignments), params  # $nor
+        return " SET " + ", ".join(assignments), params
 
     # -- read operations (§1.3) ---------------------------------------------------------
 
