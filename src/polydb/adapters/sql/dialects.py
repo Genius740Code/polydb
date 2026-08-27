@@ -29,8 +29,12 @@ SqliteDialect = Dialect(
 MysqlDialect = Dialect(
     name="mysql", placeholder="%s", supports_pool=True, identifier_quote="`"
 )
+PostgresDialect = Dialect(
+    name="postgres", placeholder="$1", supports_pool=True, identifier_quote='"'
+)
 
 DIALECTS: dict[str, Dialect] = {
     "sqlite": SqliteDialect,
     "mysql": MysqlDialect,
+    "postgres": PostgresDialect,
 }

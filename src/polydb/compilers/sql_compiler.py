@@ -92,12 +92,24 @@ class SqlCompiler:
 
     def __init__(self, dialect: Dialect) -> None:
         self.dialect = dialect
+        self._param_counter = 0
 
     # -- primitives -----------------------------------------------------------------
 
-    @property
     def _ph(self) -> str:
+        """Return the next placeholder for the current dialect.
+
+        For SQLite/MySQL: returns the static placeholder ("?" or "%s").
+        For Postgres: returns numbered placeholders ($1, $2, $3, etc.).
+        """
+        if self.dialect.placeholder == "$1":
+            self._param_counter += 1
+            return f"${self._param_counter}"
         return self.dialect.placeholder
+
+    def _reset_params(self) -> None:
+        """Reset the parameter counter for Postgres numbered placeholders."""
+        self._param_counter = 0
 
     def _quote(self, name: str) -> str:
         q = self.dialect.identifier_quote
@@ -121,6 +133,7 @@ class SqlCompiler:
         Raises:
             InvalidFilterError: If the filter violates the §2 grammar.
         """
+        self._reset_params()
         if filter_ is None:
             return "", []
         if not isinstance(filter_, dict):
@@ -170,7 +183,7 @@ class SqlCompiler:
             )
         if value is None:
             return f"{column} IS NULL", []
-        return f"{column} = {self._ph}", [value]
+        return f"{column} = {self._ph()}", [value]
 
     def _compile_operator_expr(
         self, column: str, ops: Any
@@ -221,7 +234,7 @@ class SqlCompiler:
                     f"{op} does not accept null for {column}; use $exists to "
                     f"test for missing fields"
                 )
-            return f"{column} {_COMPARISON_SQL[op]} {self._ph}", [arg]
+            return f"{column} {_COMPARISON_SQL[op]} {self._ph()}", [arg]
 
         if op in ("$in", "$nin"):
             if not isinstance(arg, list):
@@ -234,7 +247,7 @@ class SqlCompiler:
                 # combined with sibling operators inside one dict.
                 return ("0 = 1", []) if op == "$in" else ("1 = 1", [])
             joiner = "IN" if op == "$in" else "NOT IN"
-            placeholder_sql = ", ".join([self._ph] * len(arg))
+            placeholder_sql = ", ".join([self._ph() for _ in arg])
             return f"{column} {joiner} ({placeholder_sql})", list(arg)
 
         if op == "$exists":
@@ -253,7 +266,10 @@ class SqlCompiler:
                 )
             # SQLite resolves REGEXP through the user-defined function
             # registered at connect() time (§2.2); MySQL has REGEXP natively.
-            return f"{column} REGEXP {self._ph}", [arg]
+            # Postgres uses ~ for regex matching.
+            if self.dialect.name == "postgres":
+                return f"{column} ~ {self._ph()}", [arg]
+            return f"{column} REGEXP {self._ph()}", [arg]
 
         if op == "$like":
             if not isinstance(arg, str):
@@ -261,7 +277,7 @@ class SqlCompiler:
                     f"$like requires a pattern string for {column}, got "
                     f"{type(arg).__name__}"
                 )
-            return f"{column} LIKE {self._ph}", [arg]
+            return f"{column} LIKE {self._ph()}", [arg]
 
         raise InvalidFilterError(f"Unsupported operator {op!r} for {column}")
 
@@ -346,6 +362,7 @@ class SqlCompiler:
             UnsupportedOperationError: ``$push`` — no portable array-append in
                 relational SQL without a JSON-column convention (§2.4, §8.5).
         """
+        self._reset_params()
         if not isinstance(update, dict):
             raise InvalidFilterError(
                 f"update must be an operator dict ($set/$inc/$unset), got "
@@ -384,7 +401,7 @@ class SqlCompiler:
                 if op == "$unset":
                     assignments.append(f"{column} = NULL")
                 elif op == "$set":
-                    assignments.append(f"{column} = {self._ph}")
+                    assignments.append(f"{column} = {self._ph()}")
                     params.append(value)
                 else:  # $inc
                     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -392,7 +409,7 @@ class SqlCompiler:
                             f"$inc requires a numeric argument for {name!r}, "
                             f"got {value!r}"
                         )
-                    assignments.append(f"{column} = {column} + {self._ph}")
+                    assignments.append(f"{column} = {column} + {self._ph()}")
                     params.append(value)
 
         if not assignments:
@@ -410,6 +427,7 @@ class SqlCompiler:
         offset: int | None,
     ) -> CompiledQuery:
         """Compile the SELECT behind find()/find_one()."""
+        self._reset_params()
         where_sql, params = self.compile_where(filter_)
         order_sql = self._compile_sort(sort, grouped=False)
         limit_sql, page_params = self._compile_limit_offset(limit, offset)
@@ -420,12 +438,14 @@ class SqlCompiler:
         self, table: str, filter_: dict[str, Any] | None
     ) -> CompiledQuery:
         """Compile the COUNT(*) behind count()."""
+        self._reset_params()
         where_sql, params = self.compile_where(filter_)
         sql = f"SELECT COUNT(*) FROM {table}{where_sql}"
         return CompiledQuery(sql=sql, params=params)
 
     def compile_exists(self, table: str, filter_: dict[str, Any]) -> CompiledQuery:
         """Compile the short-circuiting existence probe behind exists()."""
+        self._reset_params()
         where_sql, params = self.compile_where(filter_)
         sql = f"SELECT 1 FROM {table}{where_sql} LIMIT 1"
         return CompiledQuery(sql=sql, params=params)
@@ -493,13 +513,17 @@ class SqlCompiler:
         pieces: list[str] = []
         if limit is not None:
             self._validate_paging_int("limit", limit)
-            pieces.append("LIMIT ?")
+            pieces.append(f"LIMIT {self._ph()}")
             params.append(limit)
         if offset is not None:
             self._validate_paging_int("offset", offset)
             if limit is None:
-                pieces.append("LIMIT -1")  # SQL requires LIMIT before OFFSET
-            pieces.append("OFFSET ?")
+                # SQL requires LIMIT before OFFSET; use -1 for "no limit"
+                if self.dialect.name == "postgres":
+                    pieces.append("LIMIT ALL")
+                else:
+                    pieces.append("LIMIT -1")
+            pieces.append(f"OFFSET {self._ph()}")
             params.append(offset)
         return " " + " ".join(pieces), params
 
@@ -530,6 +554,7 @@ class SqlCompiler:
                 accumulators, or unsupported ``_id`` shapes.
             InvalidFilterError: Malformed stage payloads.
         """
+        self._reset_params()
         if not isinstance(pipeline, list):
             raise InvalidFilterError(
                 f"pipeline must be a list of stages, got {type(pipeline).__name__}"
@@ -739,7 +764,7 @@ class _AggregateBuild:
             return f"{func}({self.compiler._column(acc_arg[1:])})", []
         if isinstance(acc_arg, (int, float)) and not isinstance(acc_arg, bool):
             # e.g. {"total": {"$sum": 1}} — SUM(constant) counts rows × constant.
-            return f"{_ACCUMULATOR_SQL[acc_op]}({self.compiler._ph})", [acc_arg]
+            return f"{_ACCUMULATOR_SQL[acc_op]}({self.compiler._ph()})", [acc_arg]
         raise InvalidFilterError(
             f"{acc_op} for output {out_name!r} takes a \"$field\" reference or "
             f"a numeric constant, got {acc_arg!r}"

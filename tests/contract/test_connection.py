@@ -60,12 +60,6 @@ def test_from_url_adapter_instance_per_call():
 
 # -- adapters that exist as factory targets but aren't built yet -----------------
 
-async def test_postgres_connect_not_implemented_yet():
-    db = Database.from_url("postgres://user:pass@localhost:5432/db")
-    with pytest.raises(NotImplementedError):
-        await db.connect()
-
-
 async def test_mongo_connect_not_implemented_yet():
     db = Database.from_url("mongodb://localhost:27017/db")
     with pytest.raises(NotImplementedError):
@@ -77,6 +71,23 @@ async def test_mysql_connect_not_implemented_yet():
     assert db._adapter.dialect.name == "mysql"  # factory works
     with pytest.raises(NotImplementedError):
         await db.connect()
+
+
+# -- PostgreSQL adapter specifics -------------------------------------------------
+
+def test_postgres_adapter_factory_creates_correct_instance():
+    db = Database.from_url("postgres://user:pass@localhost:5432/db")
+    assert isinstance(db._adapter, PostgresAdapter)
+    assert db._adapter.dialect.name == "postgres"
+    assert db._adapter.dialect.placeholder == "$1"
+    assert db._adapter.dialect.identifier_quote == '"'
+    assert db._adapter.dialect.supports_pool is True
+
+
+def test_postgres_adapter_pool_config_exposed():
+    db = Database.from_url("postgres://user:pass@localhost:5432/db?pool_size=5&timeout=60")
+    assert db.pool_size == 5
+    assert db.timeout == 60.0
 
 
 # -- SQLite (the one live leg of the SQL family): §1.1 #2–#6 -------------------

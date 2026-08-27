@@ -16,8 +16,8 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **28 / 28 features implemented (100%)** on the
-SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
+**28 / 28 features implemented (100%)** on the SQLite leg and PostgreSQL leg
+(planning doc §1.1 **Connection management** + §1.2 **Create** +
 §1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
 #20–#24 + §1.7 **Transactions** #25–#26 + §1.8 **Escape hatch** #27–#28). The
 full per-backend matrix lives in
@@ -26,14 +26,14 @@ full per-backend matrix lives in
 | Feature | Status |
 | ---- | ------ |
 | `Database.from_url(url) -> Database` — factory resolves every supported scheme to its adapter instance | ✅ Done |
-| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite leg; `ping` returns `False` instead of raising on an unreachable backend) |
+| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite and PostgreSQL legs; `ping` returns `False` instead of raising on an unreachable backend) |
 | `pool_size`, `timeout` query params | ✅ Done — validated at parse time, exposed as `db.pool_size` / `db.timeout`; SQLite accepts-and-ignores non-default `pool_size` with a warning (single-writer file) |
-| `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite leg; `inserted_id` = rowid) |
-| `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
-| `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite leg; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
-| `find_one(collection, filter)` → `dict \| None` | ✅ Done (SQLite leg; full Mongo-shaped filter DSL — `$eq/$ne/$gt/$gte/$lt/$lte`, `$in/$nin`, `$exists`, `$regex`, `$like`, `$and/$or/$nor/$not`) |
-| `find(collection, filter, *, sort, limit, offset)` → `list[dict]` | ✅ Done (SQLite leg; `sort` takes `(field, 1 \| -1)` pairs) |
-| `count(collection, filter)` → `int` | ✅ Done (SQLite leg) |
+| `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite and PostgreSQL legs; `inserted_id` = rowid/oid) |
+| `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite and PostgreSQL legs; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
+| `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite and PostgreSQL legs; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
+| `find_one(collection, filter)` → `dict \| None` | ✅ Done (SQLite and PostgreSQL legs; full Mongo-shaped filter DSL — `$eq/$ne/$gt/$gte/$lt/$lte`, `$in/$nin`, `$exists`, `$regex`, `$like`, `$and/$or/$nor/$not`) |
+| `find(collection, filter, *, sort, limit, offset)` → `list[dict]` | ✅ Done (SQLite and PostgreSQL legs; `sort` takes `(field, 1 \| -1)` pairs) |
+| `count(collection, filter)` → `int` | ✅ Done (SQLite and PostgreSQL legs) |
 | `exists(collection, filter)` → `bool` | ✅ Done (SQLite leg; short-circuits via `LIMIT 1`) |
 | `aggregate(collection, pipeline)` → `list[dict]` | ✅ Done (SQLite leg; restricted subset: repeatable `$match`, then at most one `$group` (`$sum/$avg/$min/$max/$count`) / `$sort` / `$limit` / `$count`; anything else raises `UnsupportedOperationError`) |
 | `update_one(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; full filter DSL + §2.4 update operators `$set`/`$inc`/`$unset` — `$push` raises `UnsupportedOperationError`; first match only) |
@@ -55,8 +55,8 @@ column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
 SQLite quotes identifiers with backticks on purpose — double-quoted unknown
 identifiers silently become string literals in SQLite, hiding typos.
 
-Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` until their
-respective build steps land (see build order §6).
+Mongo / SQL-MySQL legs raise `NotImplementedError` until their
+respective build steps land (see build order §6). PostgreSQL is fully implemented.
 
 ## Installation
 
@@ -69,7 +69,7 @@ pip install "genius74o-polydb[sqlite]"    # + a driver, or: postgres / mongo / m
 pip install "genius74o-polydb[all]"       # every driver
 ```
 
-## Quick start (SQLite — the one working leg)
+## Quick start (SQLite and PostgreSQL — the working legs)
 
 ```python
 import asyncio
@@ -113,7 +113,7 @@ returning an **unconnected** instance:
 
 | URL scheme | Adapter class | `connect()` today |
 | --- | --- | --- |
-| `postgres://` / `postgresql://` | `PostgresAdapter` | `NotImplementedError` (build step 3) |
+| `postgres://` / `postgresql://` | `PostgresAdapter` | `NotImplementedError` (✅ live (build step 3 complete)) |
 | `mongodb://` / `mongodb+srv://` | `MongoAdapter` | `NotImplementedError` (build step 4) |
 | `sqlite:///...` | `SqlAdapter` (dialect `sqlite`) | ✅ live |
 | `mysql://` | `SqlAdapter` (dialect `mysql`) | `NotImplementedError` (build step 5) |

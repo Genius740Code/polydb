@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from polydb.adapters.sql.dialects import MysqlDialect, SqliteDialect
+from polydb.adapters.sql.dialects import MysqlDialect, PostgresDialect, SqliteDialect
 from polydb.compilers.sql_compiler import SqlCompiler
 from polydb.exceptions import InvalidFilterError, UnsupportedOperationError
 
@@ -10,6 +10,11 @@ from polydb.exceptions import InvalidFilterError, UnsupportedOperationError
 @pytest.fixture
 def compiler():
     return SqlCompiler(SqliteDialect)
+
+
+@pytest.fixture
+def postgres_compiler():
+    return SqlCompiler(PostgresDialect)
 
 
 # -- compile_where: scalar shorthand -------------------------------------------------
@@ -506,7 +511,61 @@ def test_update_invalid_field_name_rejected(compiler):
         compiler.compile_update_set({"$set": {"bad name": 1}})
 
 
-def test_update_mysql_placeholder_style():
+# -- PostgreSQL-specific tests -----------------------------------------------------
+
+
+def test_postgres_numbered_placeholders_simple_filter(postgres_compiler):
+    where, params = postgres_compiler.compile_where({"age": 21})
+    assert where == ' WHERE "age" = $1'
+    assert params == [21]
+
+
+def test_postgres_numbered_placeholders_complex_filter(postgres_compiler):
+    where, params = postgres_compiler.compile_where({"age": {"$gt": 21, "$lt": 30}})
+    assert where == ' WHERE ("age" > $1 AND "age" < $2)'
+    assert params == [21, 30]
+
+
+def test_postgres_numbered_placeholders_in_operator(postgres_compiler):
+    where, params = postgres_compiler.compile_where({"status": {"$in": ["active", "pending"]}})
+    assert where == ' WHERE "status" IN ($1, $2)'
+    assert params == ["active", "pending"]
+
+
+def test_postgres_numbered_placeholders_regex_operator(postgres_compiler):
+    where, params = postgres_compiler.compile_where({"name": {"$regex": "^john"}})
+    assert where == ' WHERE "name" ~ $1'
+    assert params == ["^john"]
+
+
+def test_postgres_numbered_placeholders_logical_and(postgres_compiler):
+    where, params = postgres_compiler.compile_where({"$and": [{"age": {"$gt": 21}}, {"status": "active"}]})
+    assert where == ' WHERE (("age" > $1) AND ("status" = $2))'
+    assert params == [21, "active"]
+
+
+def test_postgres_compile_find_with_all_clauses(postgres_compiler):
+    query = postgres_compiler.compile_find(
+        "users",
+        {"age": {"$gt": 21, "$lt": 30}},
+        sort=[("name", 1)],
+        limit=10,
+        offset=5
+    )
+    assert query.sql == 'SELECT * FROM users WHERE ("age" > $1 AND "age" < $2) ORDER BY "name" ASC LIMIT $3 OFFSET $4'
+    assert query.params == [21, 30, 10, 5]
+
+
+def test_postgres_numbered_placeholders_reset_between_compilations(postgres_compiler):
+    # First compilation
+    where1, params1 = postgres_compiler.compile_where({"age": 21})
+    assert where1 == ' WHERE "age" = $1'
+    assert params1 == [21]
+    
+    # Second compilation should start counter fresh
+    where2, params2 = postgres_compiler.compile_where({"name": "john"})
+    assert where2 == ' WHERE "name" = $1'
+    assert params2 == ["john"]
     set_sql, params = SqlCompiler(MysqlDialect).compile_update_set(
         {"$set": {"a": 1}, "$inc": {"b": 2}}
     )
