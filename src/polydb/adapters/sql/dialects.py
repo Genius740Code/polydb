@@ -5,16 +5,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Dialect:
-    """Per-dialect knobs the shared SQL compiler (not yet built) will consume.
+    """Per-dialect knobs the shared SQL compiler will consume.
 
-    Kept minimal for now — only what connection management and the §1.2 Create
-    operations need. Remaining compiler-facing fields (regexp handling,
-    upsert-conflict syntax) get filled in when sql_compiler.py lands
-    (planning doc §6 step 2/5).
+    ``placeholder`` is the *base* placeholder token the compiler emits
+    (``"?"`` for sqlite, ``"%s"`` for mysql, ``"?"`` for postgres before it
+    is numbered to ``$1``/``$2``). Postgres needs numbered ``$N``
+    placeholders (asyncpg) — the adapter renumbers the ``"?"`` tokens after
+    compilation (see :func:`polydb.compilers.sql_compiler.number_placeholders`).
     """
 
     name: str
-    placeholder: str  # "?" for sqlite, "%s" for mysql
+    placeholder: str  # "?" for sqlite, "%s" for mysql, "?" (numbered later) for postgres
     supports_pool: bool
     # SQLite deliberately uses backticks (not '"'): a double-quoted token that
     # doesn't resolve to a column silently degrades to a string literal in
@@ -29,8 +30,12 @@ SqliteDialect = Dialect(
 MysqlDialect = Dialect(
     name="mysql", placeholder="%s", supports_pool=True, identifier_quote="`"
 )
+PostgresDialect = Dialect(
+    name="postgres", placeholder="?", supports_pool=True, identifier_quote='"'
+)
 
 DIALECTS: dict[str, Dialect] = {
     "sqlite": SqliteDialect,
     "mysql": MysqlDialect,
+    "postgres": PostgresDialect,
 }

@@ -37,13 +37,16 @@ surface: `delete_one`, `delete_many`), #20–#24 (all of §1.6 Schema/structure:
 `create_collection`, `drop_collection`, `list_collections`, `create_index`,
 `add_field`), #25–#26 (the full §1.7 Transactions surface:
 `transaction()` + `Transaction.commit()`/`rollback()`), and #27–#28 (the full §1.8
-escape-hatch surface: `raw`, `explain`) are done for the SQLite leg (the only live
-connection so far); everything else is not started. The §2 DSL also has its
-Mongo-side leg now: `compilers/mongo_compiler.py` validates the shared grammar
-and normalizes `$like`/`$not` for Mongo (unit-tested in isolation; adapter
-wiring itself is still pending).
+escape-hatch surface: `raw`, `explain`) are done for the **SQLite leg and the Postgres
+leg** (the two live connections; `postgres://` now opens an `asyncpg` pool with the
+Postgres dialect — `"` quoting, `~` for `$regex`, numbered `$1` placeholders via
+`number_placeholders()`, `GROUP BY ()`, `ctid` for single-row targeting). Everything
+else (Mongo, MySQL) is not started. The §2 DSL also has its Mongo-side leg now:
+`compilers/mongo_compiler.py` validates the shared grammar and normalizes
+`$like`/`$not` for Mongo (unit-tested in isolation; adapter wiring itself is
+still pending).
 
-**Progress summary: 28 / 28 features implemented (100%).**
+**Progress summary: 28 / 28 features implemented (100%) on SQLite + Postgres.**
 
 ### 1.1 Connection management
 
@@ -54,64 +57,64 @@ wiring itself is still pending).
 | 3 | `async def disconnect(self) -> None` | Closes pool/client, releases sockets. | ✅ | ✅ | ✅ | ✅ Done |
 | 4 | `async def ping(self) -> bool` | Cheap round-trip health check. Returns `False` (logged, never raised) when the backend does not answer; `ConnectionNotOpenError` before `connect()`. | ✅ | ✅ | ✅ | ✅ Done |
 | 5 | `async def __aenter__` / `__aexit__` | Context-manager sugar around connect/disconnect. | ✅ | ✅ | ✅ | ✅ Done |
-| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params and validated at parse time; exposed as properties on every adapter. | ✅ (pool wiring lands with build step 3) | ✅ (client wiring lands with build step 4) | 🟡 SQLite has no real pool (single-writer file), so a non-default `pool_size` is accepted but ignored with a logged warning. MySQL leg wires it in at build step 5. | ✅ Done |
+| 6 | `self.pool_size`, `self.timeout` (config) | Pool tuning knobs, read from the URL query params and validated at parse time; exposed as properties on every adapter. | ✅ (wired — `max_size`/`command_timeout` on `asyncpg` pool) | ✅ (client wiring lands with build step 4) | 🟡 SQLite has no real pool (single-writer file), so a non-default `pool_size` is accepted but ignored with a logged warning. MySQL leg wires it in at build step 5. | ✅ Done |
 
 ### 1.2 Create
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 7 | `async def insert_one(self, collection: str, doc: dict) -> InsertResult` | Insert a single record. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `inserted_id` is the driver's `lastrowid`) |
-| 8 | `async def insert_many(self, collection: str, docs: list[dict]) -> InsertManyResult` | Bulk insert. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`, one shared commit = all-or-nothing) |
-| 9 | `async def upsert_one(self, collection: str, filter: dict, doc: dict) -> UpsertResult` | Insert-or-update by filter match. | ✅ (`ON CONFLICT`) | ✅ (`upsert=True`) | ✅ (`INSERT ... ON CONFLICT` / `ON DUPLICATE KEY`) | ✅ Done (SQLite leg; implemented as Mongo-style find-then-update-first-match-or-insert so arbitrary filters work without unique-index knowledge — filter merges into the inserted row, doc wins on key conflicts) |
+| 7 | `async def insert_one(self, collection: str, doc: dict) -> InsertResult` | Insert a single record. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; SQLite: `lastrowid`, Postgres: `RETURNING *` + PK pick) |
+| 8 | `async def insert_many(self, collection: str, docs: list[dict]) -> InsertManyResult` | Bulk insert. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; heterogeneous docs fill missing columns with `NULL`, one shared commit = all-or-nothing) |
+| 9 | `async def upsert_one(self, collection: str, filter: dict, doc: dict) -> UpsertResult` | Insert-or-update by filter match. | ✅ (`ON CONFLICT`) | ✅ (`upsert=True`) | ✅ (`INSERT ... ON CONFLICT` / `ON DUPLICATE KEY`) | ✅ Done (SQLite + Postgres; implemented as Mongo-style find-then-update-first-match-or-insert so arbitrary filters work without unique-index knowledge — filter merges into the inserted row, doc wins on key conflicts) |
 
 ### 1.3 Read
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 10 | `async def find_one(self, collection: str, filter: dict) -> dict \| None` | Fetch first matching record. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 DSL filter support via `sql_compiler.py`) |
-| 11 | `async def find(self, collection: str, filter: dict \| None = None, *, sort=None, limit=None, offset=None) -> list[dict]` | Fetch matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `sort` is `(field, 1\|-1)` pairs, later pairs break ties; offset without limit compiles `LIMIT -1 OFFSET n`) |
-| 12 | `async def count(self, collection: str, filter: dict \| None = None) -> int` | Count matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg) |
-| 13 | `async def exists(self, collection: str, filter: dict) -> bool` | Existence check, short-circuits (LIMIT 1 / findOne projection). | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `SELECT 1 … WHERE … LIMIT 1`) |
-| 14 | `async def aggregate(self, collection: str, pipeline: list[dict]) -> list[dict]` | Grouping/aggregation. | 🟡 A **restricted** pipeline subset (`$match`, `$group`, `$sort`, `$limit`, `$count`) is translated to `GROUP BY`/`HAVING`. Anything beyond that raises `UnsupportedOperationError`. | ✅ Native. | 🟡 Same restricted subset as Postgres. | ✅ Done (SQLite leg; subset implemented — repeatable `$match`, then at most one `$group`/`$sort`/`$limit`/`$count` in canonical order, accumulators `$sum`/`$avg`/`$min`/`$max`/`$count`; group output is Mongo-shaped incl. nested composite `_id`; a global `_id: null` group over zero input rows yields `[]`, not SQL's phantom NULL row. Known divergences from Mongo: NULL-handling inside `MIN`/`MAX`/`AVG` follows SQL semantics) |
+| 10 | `async def find_one(self, collection: str, filter: dict) -> dict \| None` | Fetch first matching record. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; full §2.2 DSL filter support via `sql_compiler.py`) |
+| 11 | `async def find(self, collection: str, filter: dict \| None = None, *, sort=None, limit=None, offset=None) -> list[dict]` | Fetch matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; `sort` is `(field, 1\|-1)` pairs, later pairs break ties; offset without limit compiles `LIMIT -1 OFFSET n` on SQLite, `OFFSET n` on Postgres) |
+| 12 | `async def count(self, collection: str, filter: dict \| None = None) -> int` | Count matching records. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres) |
+| 13 | `async def exists(self, collection: str, filter: dict) -> bool` | Existence check, short-circuits (LIMIT 1 / findOne projection). | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; `SELECT 1 … WHERE … LIMIT 1`) |
+| 14 | `async def aggregate(self, collection: str, pipeline: list[dict]) -> list[dict]` | Grouping/aggregation. | 🟡 A **restricted** pipeline subset (`$match`, `$group`, `$sort`, `$limit`, `$count`) is translated to `GROUP BY`/`HAVING`. Anything beyond that raises `UnsupportedOperationError`. | ✅ Native. | 🟡 Same restricted subset as Postgres. | ✅ Done (SQLite + Postgres; subset implemented — repeatable `$match`, then at most one `$group`/`$sort`/`$limit`/`$count` in canonical order, accumulators `$sum`/`$avg`/`$min`/`$max`/`$count`; group output is Mongo-shaped incl. nested composite `_id`; a global `_id: null` group over zero input rows yields `[]`, not SQL's phantom NULL row. Known divergences from Mongo: NULL-handling inside `MIN`/`MAX`/`AVG` follows SQL semantics) |
 
 ### 1.4 Update
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 15 | `async def update_one(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update first match. `update` uses `$set`/`$inc`/`$unset` operators (see §2). | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 filter DSL via the shared compiler + §2.4 update subset via `compile_update_set`; first match targeted by rowid; empty SET clause reports honest `matched_count` with `modified_count=0`) |
-| 16 | `async def update_many(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one parameterized `UPDATE … WHERE`. Known divergence from Mongo: both counts come from the statement's rowcount — rows whose values were already equal still count as modified) |
-| 17 | `async def replace_one(self, collection: str, filter: dict, doc: dict) -> UpdateResult` | Full-document replace. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; Mongo replace semantics on a relational row — every non-PK column rewritten, absent doc fields become `NULL`, primary-key columns preserved and rejected if present in `doc` via `PRAGMA table_info` introspection; never upserts) |
+| 15 | `async def update_one(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update first match. `update` uses `$set`/`$inc`/`$unset` operators (see §2). | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; full §2.2 filter DSL via the shared compiler + §2.4 update subset via `compile_update_set`; first match targeted by rowid (SQLite) / ctid (Postgres); empty SET clause reports honest `matched_count` with `modified_count=0`) |
+| 16 | `async def update_many(self, collection: str, filter: dict, update: dict) -> UpdateResult` | Update all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; one parameterized `UPDATE … WHERE`. Known divergence from Mongo: both counts come from the statement's rowcount — rows whose values were already equal still count as modified) |
+| 17 | `async def replace_one(self, collection: str, filter: dict, doc: dict) -> UpdateResult` | Full-document replace. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; Mongo replace semantics on a relational row — every non-PK column rewritten, absent doc fields become `NULL`, primary-key columns preserved and rejected if present in `doc` via `PRAGMA table_info` introspection; never upserts) |
 
 ### 1.5 Delete
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 18 | `async def delete_one(self, collection: str, filter: dict) -> DeleteResult` | Delete first match. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; full §2.2 filter DSL via the shared compiler; first match targeted by rowid; no match writes nothing) |
-| 19 | `async def delete_many(self, collection: str, filter: dict) -> DeleteResult` | Delete all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the table like Mongo's `delete_many({})`; count from rowcount) |
+| 18 | `async def delete_one(self, collection: str, filter: dict) -> DeleteResult` | Delete first match. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; full §2.2 filter DSL via the shared compiler; first match targeted by rowid (SQLite) / ctid (Postgres); no match writes nothing) |
+| 19 | `async def delete_many(self, collection: str, filter: dict) -> DeleteResult` | Delete all matches. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; one parameterized `DELETE … WHERE`; empty filter clears the table like Mongo's `delete_many({})`; count from rowcount) |
 
 ### 1.6 Schema / structure
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 20 | `async def create_collection(self, name: str, schema: Schema \| None = None) -> None` | Create a table/collection. `schema` is optional structured column spec (see illustrative `Schema` below). | ✅ Required (`schema=None` raises `SchemaRequiredError`). | ✅ `schema` ignored — Mongo is schemaless; a logged info-level note is emitted. | ✅ Required, same as Postgres. | ✅ Done (SQLite leg; a small Schema→`CREATE TABLE` compiler — `schema=None` or a zero-field schema raises `SchemaRequiredError`; field names validated like any DSL identifier; str/int/float/bool map to native column types, datetime/json stored as TEXT holding ISO-8601 / serialized JSON; nullable/default/primary_key/unique all enforced by the DDL — an `INTEGER PRIMARY KEY` aliases rowid so `inserted_id` works; creating an existing name raises `PolydbQueryError`) |
-| 21 | `async def drop_collection(self, name: str) -> None` | Drop table/collection if exists. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; `DROP TABLE IF EXISTS`, idempotent no-op on absent names) |
-| 22 | `async def list_collections(self) -> list[str]` | Enumerate tables/collections. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; sorted user tables from `sqlite_master`, excluding `sqlite_*` internals and views) |
-| 23 | `async def create_index(self, collection: str, fields: list[str], *, unique: bool = False) -> None` | Create an index. | ✅ | ✅ | ✅ | ✅ Done (SQLite leg; one `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique — so re-issuing an identical call is an `IF NOT EXISTS` no-op matching Mongo's `createIndex`; caveat: a different spec colliding on the derived name is silently ignored; empty field list raises `InvalidFilterError`; indexing a missing column/table surfaces as `PolydbQueryError`) |
-| 24 | `async def add_field(self, collection: str, field: str, type_: FieldType, default: Any = None) -> None` | Add a column (relational) / no-op with warning (Mongo, since docs are dynamic). | ✅ | 🟡 No-op + logged warning — new field just appears on next write. | ✅ | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same `_FIELD_TYPE_TO_SQL` mapping as #20; non-None scalar default becomes a DDL `DEFAULT` that also backfills existing rows; new columns always nullable — SQLite forbids PK/UNIQUE in ALTER TABLE so those constraints are out of contract; duplicate column / absent table → `PolydbQueryError`, bad name/type/non-scalar default → `InvalidFilterError`) |
+| 20 | `async def create_collection(self, name: str, schema: Schema \| None = None) -> None` | Create a table/collection. `schema` is optional structured column spec (see illustrative `Schema` below). | ✅ Required (`schema=None` raises `SchemaRequiredError`). | ✅ `schema` ignored — Mongo is schemaless; a logged info-level note is emitted. | ✅ Required, same as Postgres. | ✅ Done (SQLite + Postgres; a small Schema→`CREATE TABLE` compiler — `schema=None` or a zero-field schema raises `SchemaRequiredError`; field names validated like any DSL identifier; str/int/float/bool map to native column types, datetime/json stored as TEXT holding ISO-8601 / serialized JSON; nullable/default/primary_key/unique all enforced by the DDL — an `INTEGER PRIMARY KEY` aliases rowid (SQLite) / `SERIAL PRIMARY KEY` (Postgres) so `inserted_id` works; creating an existing name raises `PolydbQueryError`) |
+| 21 | `async def drop_collection(self, name: str) -> None` | Drop table/collection if exists. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; `DROP TABLE IF EXISTS`, idempotent no-op on absent names) |
+| 22 | `async def list_collections(self) -> list[str]` | Enumerate tables/collections. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; sorted user tables from `sqlite_master`, excluding `sqlite_*` internals and views) |
+| 23 | `async def create_index(self, collection: str, fields: list[str], *, unique: bool = False) -> None` | Create an index. | ✅ | ✅ | ✅ | ✅ Done (SQLite + Postgres; one `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique — so re-issuing an identical call is an `IF NOT EXISTS` no-op matching Mongo's `createIndex`; caveat: a different spec colliding on the derived name is silently ignored; empty field list raises `InvalidFilterError`; indexing a missing column/table surfaces as `PolydbQueryError`) |
+| 24 | `async def add_field(self, collection: str, field: str, type_: FieldType, default: Any = None) -> None` | Add a column (relational) / no-op with warning (Mongo, since docs are dynamic). | ✅ | 🟡 No-op + logged warning — new field just appears on next write. | ✅ | ✅ Done (SQLite + Postgres; `ALTER TABLE … ADD COLUMN`, same `_FIELD_TYPE_TO_SQL` mapping as #20; non-None scalar default becomes a DDL `DEFAULT` that also backfills existing rows; new columns always nullable — SQLite forbids PK/UNIQUE in ALTER TABLE so those constraints are out of contract; duplicate column / absent table → `PolydbQueryError`, bad name/type/non-scalar default → `InvalidFilterError`) |
 
 ### 1.7 Transactions
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 25 | `async def transaction(self) -> AsyncContextManager[Transaction]` | Opens a transaction; all calls on the yielded `Transaction` object are atomic together. | ✅ Full ACID. | 🟡 Requires a replica set / Atlas (standalone Mongo has no multi-doc transactions) — raises `TransactionsUnavailableError` if the server topology doesn't support them. | ✅ Postgres/MySQL full ACID. 🟡 SQLite: single writer, transactions serialize rather than truly isolate under concurrency — documented, not hidden. | ✅ Done (SQLite leg; `BEGIN` on context-manager entry, one atomic block on the adapter's single connection — per-operation commits are suppressed until the tx ends, so calls through the yielded handle *and* direct adapter calls inside the block commit/rollback together; a failed statement aborts the whole transaction (Postgres/Mongo poisoned-transaction precedent) and later calls through the handle raise the new `TransactionInactiveError`; nested/concurrent transactions raise `UnsupportedOperationError`; SQLite transactional DDL means `create_collection`/`drop_collection` roll back too) |
-| 26 | `Transaction.commit()` / `Transaction.rollback()` | Explicit control; also auto-commit/rollback on context-manager exit. | ✅ | 🟡 (see #25) | ✅ | ✅ Done (SQLite leg; explicit calls plus auto-commit on clean exit / auto-rollback when an exception escapes; a small state machine (`new → active → committed \| rolled_back \| aborted`) makes double-finalize and use-before-enter raise `TransactionInactiveError` instead of corrupting state) |
+| 25 | `async def transaction(self) -> AsyncContextManager[Transaction]` | Opens a transaction; all calls on the yielded `Transaction` object are atomic together. | ✅ Full ACID. | 🟡 Requires a replica set / Atlas (standalone Mongo has no multi-doc transactions) — raises `TransactionsUnavailableError` if the server topology doesn't support them. | ✅ Postgres/MySQL full ACID. 🟡 SQLite: single writer, transactions serialize rather than truly isolate under concurrency — documented, not hidden. | ✅ Done (SQLite + Postgres; `BEGIN`/`trx.start()` on context-manager entry, one atomic block — per-operation commits suppressed until the tx ends, so calls through the yielded handle *and* direct adapter calls inside the block commit/rollback together; a failed statement aborts the whole transaction (poisoned-transaction precedent) and later calls through the handle raise `TransactionInactiveError`; nested/concurrent transactions raise `UnsupportedOperationError`; transactional DDL rolls back on both) |
+| 26 | `Transaction.commit()` / `Transaction.rollback()` | Explicit control; also auto-commit/rollback on context-manager exit. | ✅ | 🟡 (see #25) | ✅ | ✅ Done (SQLite + Postgres; explicit calls plus auto-commit on clean exit / auto-rollback when an exception escapes; a small state machine (`new → active → committed \| rolled_back \| aborted`) makes double-finalize and use-before-enter raise `TransactionInactiveError` instead of corrupting state) |
 
 ### 1.8 Escape hatch (raw queries)
 
 | # | Signature | Description | Postgres | Mongo | SQL family | Status |
 |---|---|---|---|---|---|---|
-| 27 | `async def raw(self, query: Any, params: Any = None) -> Any` | Pass-through to the native driver. `query` is a SQL string for relational backends, a Mongo command dict for Mongo. Return type is intentionally `Any` — this method opts *out* of the abstraction. | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ✅ Done (SQLite leg; `query` must be a non-empty SQL string — no DSL compilation; `params` may be `None`, a positional sequence, or a named-parameter mapping (str/bytes rejected as near-certain quoting mistakes); rows return as `list[dict]`, empty for statements producing no rows; writes commit before returning exactly like every polydb write, and inside an open §1.7 transaction the statement joins the atomic block instead; a failing statement rolls back like any other operation and surfaces as `PolydbQueryError`, aborting an open transaction wholesale) |
-| 28 | `async def explain(self, collection: str, filter: dict) -> dict` | Returns the backend's native query plan for a translated filter — debugging aid. | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ✅ Done (SQLite leg; the filter compiles through the shared compiler exactly as `find()` would, then runs under `EXPLAIN QUERY PLAN` so the plan describes what the abstraction actually executes; returns `{"backend", "sql", "params", "plan"}` with the native plan rows (`id`/`parent`/`notused`/`detail`) as dicts; read-only, opens no write transaction) |
+| 27 | `async def raw(self, query: Any, params: Any = None) -> Any` | Pass-through to the native driver. `query` is a SQL string for relational backends, a Mongo command dict for Mongo. Return type is intentionally `Any` — this method opts *out* of the abstraction. | ✅ (`str`, params tuple/dict) | ✅ (`dict` command) | ✅ (`str`, params tuple/dict) | ✅ Done (SQLite + Postgres; `query` must be a non-empty SQL string — no DSL compilation; `params` may be `None`, a positional sequence, or a named-parameter mapping (str/bytes rejected as near-certain quoting mistakes); rows return as `list[dict]`, empty for statements producing no rows; writes commit before returning exactly like every polydb write, and inside an open §1.7 transaction the statement joins the atomic block instead; a failing statement rolls back like any other operation and surfaces as `PolydbQueryError`, aborting an open transaction wholesale) |
+| 28 | `async def explain(self, collection: str, filter: dict) -> dict` | Returns the backend's native query plan for a translated filter — debugging aid. | ✅ (`EXPLAIN`) | ✅ (`.explain()`) | ✅ (`EXPLAIN`) | ✅ Done (SQLite + Postgres; the filter compiles through the shared compiler exactly as `find()` would, then runs under `EXPLAIN QUERY PLAN` so the plan describes what the abstraction actually executes; returns `{"backend", "sql", "params", "plan"}` with the native plan rows (`id`/`parent`/`notused`/`detail`) as dicts; read-only, opens no write transaction) |
 
 ---
 
@@ -479,12 +482,14 @@ polydb/
    `%s` placeholders — one variable at a time.
 
 3. **PostgreSQL adapter, reusing `sql_compiler.py` with a Postgres dialect
-   (numbered `$1` placeholders, `ON CONFLICT`, native `EXPLAIN`).** Postgres comes second
-   because it validates that the compiler built in step 2 is genuinely dialect-agnostic —
-   if Postgres support requires touching core compiler logic (not just the dialect config),
-   that's a signal the abstraction boundary was wrong, and it's far cheaper to fix after one
-   adapter than after three. Postgres also has the richest ACID/transaction semantics, so it
-   becomes the reference implementation for `transaction()`.
+   (numbered `$1` placeholders via `number_placeholders()`, `"` quoting, `~` for
+   `$regex`, `GROUP BY ()` for global groups, `OFFSET` without `LIMIT -1`,
+   `ctid` for single-row targeting, `asyncpg` pool).** ✅ Done. Postgres came second
+   because it validated that the compiler built in step 2 is genuinely dialect-agnostic —
+   the only touches to core compiler logic were dialect-switched (`~` for `$regex`,
+   `_compile_limit_offset` using `self._ph`, `GROUP BY ()`, new `PostgresDialect`)
+   rather than a reshape. Postgres also has the richest ACID/transaction semantics, so it
+   is the reference implementation for `transaction()` alongside SQLite.
 
 4. **MongoDB adapter.** Deliberately last among the "real" backends because Mongo is the
    *odd one out* — schemaless, no relational JOIN concept, transactions require a replica

@@ -1,9 +1,12 @@
 """Basic CRUD with polydb — every implemented operation in one script.
 
-Runs entirely against SQLite (the one backend whose build step has landed, see
-planning doc §6), so you can execute it with no services running:
+Runs against SQLite (no services needed) and the same code works against
+Postgres (both legs live as of planning doc §6 step 3). SQLite example:
 
     PYTHONPATH=src python3 examples/basic_crud.py
+
+Swap the URL to ``postgres://user:pass@localhost/db`` to run the identical
+flow against Postgres (requires a running server).
 
 Filters and updates use the Mongo-shaped DSL documented in
 docs/dsl_spec.md; the SQL compiler turns them into fully parameterized SQL.

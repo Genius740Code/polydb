@@ -16,47 +16,45 @@ support matrix and build order.
 
 ## Current status
 
-Planned, not fully built: **28 / 28 features implemented (100%)** on the
-SQLite leg (planning doc §1.1 **Connection management** + §1.2 **Create** +
-§1.3 **Read** + §1.4 **Update** + §1.5 **Delete** + §1.6 **Schema/structure**
-#20–#24 + §1.7 **Transactions** #25–#26 + §1.8 **Escape hatch** #27–#28). The
+Two legs live: **28 / 28 features implemented (100%)** on **SQLite** (`aiosqlite`) and **Postgres** (`asyncpg`) — every feature Row #1–#28 in planning doc §1. The
 full per-backend matrix lives in
 [docs/supported_operations_matrix.md](docs/supported_operations_matrix.md).
 
 | Feature | Status |
 | ---- | ------ |
 | `Database.from_url(url) -> Database` — factory resolves every supported scheme to its adapter instance | ✅ Done |
-| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite leg; `ping` returns `False` instead of raising on an unreachable backend) |
+| `connect()` / `disconnect()` / `ping()` / async context manager | ✅ Done (SQLite + Postgres; `ping` returns `False` instead of raising on an unreachable backend) |
 | `pool_size`, `timeout` query params | ✅ Done — validated at parse time, exposed as `db.pool_size` / `db.timeout`; SQLite accepts-and-ignores non-default `pool_size` with a warning (single-writer file) |
-| `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite leg; `inserted_id` = rowid) |
-| `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite leg; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
-| `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite leg; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
-| `find_one(collection, filter)` → `dict \| None` | ✅ Done (SQLite leg; full Mongo-shaped filter DSL — `$eq/$ne/$gt/$gte/$lt/$lte`, `$in/$nin`, `$exists`, `$regex`, `$like`, `$and/$or/$nor/$not`) |
-| `find(collection, filter, *, sort, limit, offset)` → `list[dict]` | ✅ Done (SQLite leg; `sort` takes `(field, 1 \| -1)` pairs) |
-| `count(collection, filter)` → `int` | ✅ Done (SQLite leg) |
-| `exists(collection, filter)` → `bool` | ✅ Done (SQLite leg; short-circuits via `LIMIT 1`) |
-| `aggregate(collection, pipeline)` → `list[dict]` | ✅ Done (SQLite leg; restricted subset: repeatable `$match`, then at most one `$group` (`$sum/$avg/$min/$max/$count`) / `$sort` / `$limit` / `$count`; anything else raises `UnsupportedOperationError`) |
-| `update_one(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; full filter DSL + §2.4 update operators `$set`/`$inc`/`$unset` — `$push` raises `UnsupportedOperationError`; first match only) |
-| `update_many(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite leg; one parameterized `UPDATE … WHERE` — counts come from rowcount, so already-equal values still count as modified) |
-| `replace_one(collection, filter, doc)` → `UpdateResult` | ✅ Done (SQLite leg; full-document replace — absent doc fields become `NULL`, primary-key columns preserved and rejected in `doc`; never upserts) |
-| `delete_one(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; full filter DSL; deletes the first match only) |
-| `delete_many(collection, filter)` → `DeleteResult` | ✅ Done (SQLite leg; one parameterized `DELETE … WHERE`; empty filter clears the collection) |
-| `create_collection(name, schema=None)` | ✅ Done (SQLite leg; Schema→`CREATE TABLE` compiler — schema required (`SchemaRequiredError` otherwise); str/int/float/bool native types, datetime/json stored as TEXT; nullable/default/primary_key/unique enforced by the DDL) |
-| `drop_collection(name)` | ✅ Done (SQLite leg; idempotent — dropping an absent name is a silent no-op) |
-| `list_collections()` → `list[str]` | ✅ Done (SQLite leg; sorted user tables, `sqlite_*` internals and views excluded) |
-| `create_index(collection, fields, *, unique=False)` | ✅ Done (SQLite leg; `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex`; empty field list raises) |
-| `add_field(collection, field, type_, default=None)` | ✅ Done (SQLite leg; `ALTER TABLE … ADD COLUMN`, same type mapping as `create_collection`; non-None scalar default becomes a `DEFAULT` clause that backfills existing rows; new columns always nullable) |
-| `transaction()` → `async with db.transaction() as tx:` | ✅ Done (SQLite leg; explicit `BEGIN`, one atomic block on the adapter's single connection — writes through `tx.*` (and direct adapter calls inside the block) commit together on clean exit or roll back wholesale on error; a failed statement aborts the transaction like a poisoned Postgres tx and later calls raise `TransactionInactiveError`; nested transactions raise `UnsupportedOperationError`; SQLite's single-writer file means serialization, not true isolation, under concurrency) |
-| `raw(query, params=None)` → `list[dict]` | ✅ Done (SQLite leg; escape hatch — plain SQL string, positional sequence or `:named` dict params, rows as plain dicts; no DSL compilation; writes commit like every polydb write or join an open transaction; driver failures raise `PolydbQueryError`) |
-| `explain(collection, filter)` → `dict` | ✅ Done (SQLite leg; filter compiles exactly as `find()` would, run under `EXPLAIN QUERY PLAN`; returns `{"backend", "sql", "params", "plan"}`) |
+| `insert_one(collection, doc)` → `InsertResult` | ✅ Done (SQLite: `lastrowid`; Postgres: `RETURNING *` + PK pick) |
+| `insert_many(collection, docs)` → `InsertManyResult` | ✅ Done (SQLite + Postgres; heterogeneous docs fill missing columns with `NULL`; one commit, all-or-nothing) |
+| `upsert_one(collection, filter, doc)` → `UpsertResult` | ✅ Done (SQLite + Postgres; Mongo-style match-first-row-or-insert semantics — filter fields merge into the inserted row, `doc` wins on key conflicts) |
+| `find_one(collection, filter)` → `dict \| None` | ✅ Done (SQLite + Postgres; full Mongo-shaped filter DSL — `$eq/$ne/$gt/$gte/$lt/$lte`, `$in/$nin`, `$exists`, `$regex`, `$like`, `$and/$or/$nor/$not`) |
+| `find(collection, filter, *, sort, limit, offset)` → `list[dict]` | ✅ Done (SQLite + Postgres; `sort` takes `(field, 1 \| -1)` pairs) |
+| `count(collection, filter)` → `int` | ✅ Done (SQLite + Postgres) |
+| `exists(collection, filter)` → `bool` | ✅ Done (SQLite + Postgres; short-circuits via `LIMIT 1`) |
+| `aggregate(collection, pipeline)` → `list[dict]` | ✅ Done (SQLite + Postgres; restricted subset: repeatable `$match`, then at most one `$group` (`$sum/$avg/$min/$max/$count`) / `$sort` / `$limit` / `$count`; anything else raises `UnsupportedOperationError`) |
+| `update_one(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite + Postgres; full filter DSL + §2.4 update operators `$set`/`$inc`/`$unset` — `$push` raises `UnsupportedOperationError`; first match only) |
+| `update_many(collection, filter, update)` → `UpdateResult` | ✅ Done (SQLite + Postgres; one parameterized `UPDATE … WHERE` — counts come from rowcount, so already-equal values still count as modified) |
+| `replace_one(collection, filter, doc)` → `UpdateResult` | ✅ Done (SQLite + Postgres; full-document replace — absent doc fields become `NULL`, primary-key columns preserved and rejected in `doc`; never upserts) |
+| `delete_one(collection, filter)` → `DeleteResult` | ✅ Done (SQLite + Postgres; full filter DSL; deletes the first match only) |
+| `delete_many(collection, filter)` → `DeleteResult` | ✅ Done (SQLite + Postgres; one parameterized `DELETE … WHERE`; empty filter clears the collection) |
+| `create_collection(name, schema=None)` | ✅ Done (SQLite + Postgres; Schema→`CREATE TABLE` compiler — schema required (`SchemaRequiredError` otherwise); str/int/float/bool native types, datetime/json stored as TEXT; nullable/default/primary_key/unique enforced by the DDL) |
+| `drop_collection(name)` | ✅ Done (SQLite + Postgres; idempotent — dropping an absent name is a silent no-op) |
+| `list_collections()` → `list[str]` | ✅ Done (SQLite + Postgres; sorted user tables, `sqlite_*` internals and views excluded) |
+| `create_index(collection, fields, *, unique=False)` | ✅ Done (SQLite + Postgres; `CREATE [UNIQUE] INDEX` with a deterministic derived name — `idx_<table>__<f1>__<f2>`, `uq_…` for unique; `IF NOT EXISTS`-idempotent like Mongo's `createIndex`; empty field list raises) |
+| `add_field(collection, field, type_, default=None)` | ✅ Done (SQLite + Postgres; `ALTER TABLE … ADD COLUMN`, same type mapping as `create_collection`; non-None scalar default becomes a `DEFAULT` clause that backfills existing rows; new columns always nullable) |
+| `transaction()` → `async with db.transaction() as tx:` | ✅ Done (SQLite + Postgres; explicit `BEGIN`, one atomic block on the adapter's single connection — writes through `tx.*` (and direct adapter calls inside the block) commit together on clean exit or roll back wholesale on error; a failed statement aborts the transaction like a poisoned Postgres tx and later calls raise `TransactionInactiveError`; nested transactions raise `UnsupportedOperationError`; SQLite's single-writer file means serialization, not true isolation, under concurrency) |
+| `raw(query, params=None)` → `list[dict]` | ✅ Done (SQLite + Postgres; escape hatch — plain SQL string, positional sequence or `:named` dict params, rows as plain dicts; no DSL compilation; writes commit like every polydb write or join an open transaction; driver failures raise `PolydbQueryError`) |
+| `explain(collection, filter)` → `dict` | ✅ Done (SQLite + Postgres; filter compiles exactly as `find()` would, run under `EXPLAIN QUERY PLAN`; returns `{"backend", "sql", "params", "plan"}`) |
 
 Filters are compiled by the shared `sql_compiler.py` into fully parameterized SQL;
 column/table names are validated against `[A-Za-z_][A-Za-z0-9_]*` and quoted.
 SQLite quotes identifiers with backticks on purpose — double-quoted unknown
-identifiers silently become string literals in SQLite, hiding typos.
+identifiers silently become string literals in SQLite, hiding typos — while
+Postgres uses double quotes and numbered `$1` placeholders via `number_placeholders()`.
 
-Postgres / Mongo / SQL-MySQL legs raise `NotImplementedError` until their
-respective build steps land (see build order §6).
+Mongo / MySQL legs raise `NotImplementedError` until their respective build steps
+land (see build order §6); Postgres and SQLite are live.
 
 ## Installation
 
@@ -69,7 +67,7 @@ pip install "genius74o-polydb[sqlite]"    # + a driver, or: postgres / mongo / m
 pip install "genius74o-polydb[all]"       # every driver
 ```
 
-## Quick start (SQLite — the one working leg)
+## Quick start (SQLite + Postgres — live legs)
 
 ```python
 import asyncio
@@ -78,7 +76,7 @@ from polydb import Database
 
 
 async def main() -> None:
-    async with Database.from_url("sqlite:///:memory:") as db:
+    async with Database.from_url("sqlite:///:memory:") as db:  # or postgres://user:pass@localhost/db
         assert await db.ping() is True
 
 asyncio.run(main())
@@ -113,7 +111,7 @@ returning an **unconnected** instance:
 
 | URL scheme | Adapter class | `connect()` today |
 | --- | --- | --- |
-| `postgres://` / `postgresql://` | `PostgresAdapter` | `NotImplementedError` (build step 3) |
+| `postgres://` / `postgresql://` | `PostgresAdapter` | ✅ live (`asyncpg` pool, `$1` placeholders, `~` for `$regex`) |
 | `mongodb://` / `mongodb+srv://` | `MongoAdapter` | `NotImplementedError` (build step 4) |
 | `sqlite:///...` | `SqlAdapter` (dialect `sqlite`) | ✅ live |
 | `mysql://` | `SqlAdapter` (dialect `mysql`) | `NotImplementedError` (build step 5) |

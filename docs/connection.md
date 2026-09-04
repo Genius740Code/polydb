@@ -12,8 +12,8 @@ Supported schemes (adapted from `polydb/url_parser.py`):
 
 | Scheme | Family | Adapter class | Dialect | `connect()` |
 | --- | --- | --- | --- | --- |
-| `postgres://` | `postgres` | `polydb.adapters.postgres.PostgresAdapter` | — | build step 3 (`NotImplementedError`) |
-| `postgresql://` | `postgres` | `PostgresAdapter` | — | build step 3 |
+| `postgres://` | `postgres` | `polydb.adapters.postgres.PostgresAdapter` | `postgres` | ✅ implemented (asyncpg pool, `$1` placeholders, `~` for `$regex`) |
+| `postgresql://` | `postgres` | `PostgresAdapter` | `postgres` | ✅ implemented |
 | `mongodb://` | `mongo` | `polydb.adapters.mongo.MongoAdapter` | — | build step 4 |
 | `mongodb+srv://` | `mongo` | `MongoAdapter` | — | build step 4 |
 | `sqlite:///...` | `sql` | `polydb.adapters.sql.base.SqlAdapter` | `sqlite` | ✅ implemented |
@@ -122,5 +122,9 @@ Calls that require an open connection raise `ConnectionNotOpenError` otherwise.
   [supported_operations_matrix.md](supported_operations_matrix.md) for exactly
   what is live, and [dsl_spec.md](dsl_spec.md) for the filter/update DSL those
   methods accept.
-- Steps 3–5 (Postgres connect, Mongo connect, MySQL connect) — **pending**;
+- Step 3 (Postgres adapter, asyncpg) — **done**: full CRUD, schema, transactions,
+  `raw`/`explain`, reusing the shared `SqlCompiler` with Postgres dialect
+  (numbered `$1` placeholders via `number_placeholders()`, `"` quoting, `~` for
+  `$regex`, `GROUP BY ()` for global groups, `OFFSET` without `LIMIT -1`).
+- Steps 4–5 (Mongo connect, MySQL connect) — **pending**;
   until then their adapters raise `NotImplementedError` from `connect()`.

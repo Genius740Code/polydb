@@ -58,6 +58,33 @@ def validate_identifier(name: str, kind: str) -> str:
     return name
 
 
+def number_placeholders(sql: str) -> str:
+    """Replace each ``?`` placeholder with a numbered ``$N`` for Postgres (asyncpg).
+
+    The shared compiler always emits ``?`` (``_ph == "?"``) for the Postgres
+    dialect; this helper renumbers them sequentially (``$1``, ``$2``, …) so
+    the statement can be passed to ``asyncpg``. Only ``?`` tokens that
+    represent placeholders are replaced — the caller must not have ``?``
+    inside string literals (the compiler never puts values into the SQL
+    string, so this is safe).
+
+    Args:
+        sql: A statement containing ``?`` placeholders.
+
+    Returns:
+        The same statement with ``$N`` placeholders in left-to-right order.
+    """
+    out: list[str] = []
+    counter = 0
+    for ch in sql:
+        if ch == "?":
+            counter += 1
+            out.append(f"${counter}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 @dataclass
 class CompiledQuery:
     """A compiled SQL statement plus its ordered bind parameters."""
@@ -252,7 +279,10 @@ class SqlCompiler:
                     f"{type(arg).__name__}"
                 )
             # SQLite resolves REGEXP through the user-defined function
-            # registered at connect() time (§2.2); MySQL has REGEXP natively.
+            # registered at connect() time (§2.2); MySQL has REGEXP natively;
+            # Postgres uses the native ``~`` (POSIX regex) operator per §2.2.
+            if self.dialect.name == "postgres":
+                return f"{column} ~ {self._ph}", [arg]
             return f"{column} REGEXP {self._ph}", [arg]
 
         if op == "$like":
@@ -493,13 +523,13 @@ class SqlCompiler:
         pieces: list[str] = []
         if limit is not None:
             self._validate_paging_int("limit", limit)
-            pieces.append("LIMIT ?")
+            pieces.append(f"LIMIT {self._ph}")
             params.append(limit)
         if offset is not None:
             self._validate_paging_int("offset", offset)
-            if limit is None:
+            if limit is None and self.dialect.name == "sqlite":
                 pieces.append("LIMIT -1")  # SQL requires LIMIT before OFFSET
-            pieces.append("OFFSET ?")
+            pieces.append(f"OFFSET {self._ph}")
             params.append(offset)
         return " " + " ".join(pieces), params
 
@@ -727,7 +757,13 @@ class _AggregateBuild:
         if group_columns:
             group_by_sql = " GROUP BY " + ", ".join(group_columns)
         else:
-            group_by_sql = " GROUP BY NULL HAVING COUNT(*) > 0"
+            # Postgres uses GROUP BY () (empty grouping set) while SQLite
+            # uses GROUP BY NULL — both produce one global group, and the
+            # HAVING drops the phantom row when there is no input.
+            if self.compiler.dialect.name == "postgres":
+                group_by_sql = " GROUP BY () HAVING COUNT(*) > 0"
+            else:
+                group_by_sql = " GROUP BY NULL HAVING COUNT(*) > 0"
         return select_sql, select_params, group_by_sql, aliases
 
     def _accumulator_arg(

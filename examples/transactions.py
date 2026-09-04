@@ -1,9 +1,10 @@
 """Transactions with polydb — atomic multi-operation blocks (§1.7 #25–#26).
 
-Runs entirely against SQLite (the one backend whose build step has landed, see
-planning doc §6), so you can execute it with no services running:
+Runs against SQLite (no services needed) and the same code works against
+Postgres — both legs live as of planning doc §6 step 3:
 
-    PYTHONPATH=src python3 examples/transactions.py
+    PYTHONPATH=src python3 examples/transactions.py  # SQLite
+    # or: postgres://user:pass@localhost/db for Postgres
 
 Everything routed through the yielded ``tx`` handle — inserts, reads, updates,
 deletes, even DDL — commits together on a clean exit and rolls back wholesale

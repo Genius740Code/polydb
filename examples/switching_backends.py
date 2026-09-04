@@ -3,11 +3,12 @@
 The whole point of ``Database.from_url``: the same application code talks to
 Postgres, MongoDB, SQLite, or MySQL and the only difference is the URL.
 
-As of this build step (planning doc §6) only the SQLite leg can actually
-``connect()`` — the Postgres, Mongo, and MySQL builds raise
-``NotImplementedError``. This script is written so it keeps working (and stays
-honest) as those steps land: it reports which adapter each URL resolved to, and
-only performs real I/O where the backend can connect.
+As of this build step (planning doc §6) the SQLite and Postgres legs can
+actually ``connect()`` — Mongo and MySQL still raise ``NotImplementedError``.
+This script is written so it keeps working (and stays honest) as those steps
+land: it reports which adapter each URL resolved to, and only performs real I/O
+where the backend can connect (Postgres needs a running server or it reports
+the connection error).
 """
 
 from __future__ import annotations
@@ -35,6 +36,12 @@ async def probe(name: str, url: str) -> None:
     if isinstance(adapter, SqlAdapter) and dialect and dialect.name == "sqlite":
         async with db:
             status = f"connected; ping={await db.ping()}"
+    elif dialect is not None and dialect.name == "postgres":
+        try:
+            async with db:
+                status = f"connected; ping={await db.ping()}"
+        except Exception as err:
+            status = f"connect failed (no server?): {err}"
     else:
         try:
             await db.connect()

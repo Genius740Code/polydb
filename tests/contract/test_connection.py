@@ -60,10 +60,40 @@ def test_from_url_adapter_instance_per_call():
 
 # -- adapters that exist as factory targets but aren't built yet -----------------
 
-async def test_postgres_connect_not_implemented_yet():
-    db = Database.from_url("postgres://user:pass@localhost:5432/db")
-    with pytest.raises(NotImplementedError):
-        await db.connect()
+async def test_postgres_adapter_resolves_and_pool_knobs_wired(monkeypatch):
+    # Postgres build step 3 is done — from_url resolves and connect wires pool_size/timeout
+    # into asyncpg.create_pool (mocked here so no real server is needed).
+    import asyncpg
+    from unittest.mock import AsyncMock, MagicMock
+
+    captured: dict = {}
+
+    async def fake_create_pool(**kwargs):
+        captured.update(kwargs)
+        fake_pool = MagicMock()
+        fake_pool.acquire = MagicMock()
+        fake_pool.close = AsyncMock()
+        fake_pool.release = AsyncMock()
+        # minimal fetch for ping if someone calls it, but not needed here
+        return fake_pool
+
+    monkeypatch.setattr(asyncpg, "create_pool", fake_create_pool)
+
+    db = Database.from_url("postgres://user:pass@localhost:5432/db?pool_size=3&timeout=2.5")
+    assert isinstance(db._adapter, PostgresAdapter)
+    assert db._adapter.dialect.name == "postgres"
+    assert db.pool_size == 3
+    assert db.timeout == 2.5
+    await db.connect()
+    assert captured["host"] == "localhost"
+    assert captured["port"] == 5432
+    assert captured["user"] == "user"
+    assert captured["database"] == "db"
+    assert captured["max_size"] == 3
+    assert captured["command_timeout"] == 2.5
+    assert db._adapter._connected is True
+    await db.disconnect()
+    assert db._adapter._connected is False
 
 
 async def test_mongo_connect_not_implemented_yet():
