@@ -1,7 +1,9 @@
 # `polydb` — Universal Async Database Abstraction Layer
 
-**Planning Document v1**
-Status: pre-implementation, no code written yet.
+**Planning Document v2 — Living Roadmap**
+Status: **SQLite + Postgres + Mongo legs complete (28/28 features each)** · MySQL pending.
+Last updated: 2026-09-05 · Branch: `development` (release via `master` → PyPI) · Package: `genius74o-polydb` on PyPI, `import polydb`
+Progress: `src/polydb/adapters/sql/base.py` + `src/polydb/adapters/postgres.py` + `src/polydb/adapters/mongo.py` = live · `mysql_driver.py` = stub (`NotImplementedError`)
 
 ---
 
@@ -19,34 +21,92 @@ pretending it's solved — see §1 support matrix and §8 open questions.
 
 ---
 
+## What to do next — TL;DR
+
+> **Pick up here.** The rest of the document is reference. This section is the only one you need to decide what to work on.
+
+### Where we are
+
+- **Shipped (100% on 3 backends):** every feature §1.1–§1.8 (#1–#28) is implemented, tested, and passing on **SQLite** (`aiosqlite`, `SqlAdapter` dialect `sqlite`), **Postgres** (`asyncpg`, `PostgresAdapter`), and **MongoDB** (`motor`, `MongoAdapter`). The shared DSL compilers `compilers/sql_compiler.py` (SQL) and `compilers/mongo_compiler.py` (Mongo pass-through + `$like` normalizer) are both live.
+- **Not started (stub raises `NotImplementedError` on `connect()`):** **MySQL** (`adapters/sql/mysql_driver.py`, `asyncmy`). `Database.from_url()` already resolves its scheme to the correct adapter class — the wiring is missing.
+
+```
+Done:   [████████████████████] SQLite  28/28  ✅
+Done:   [████████████████████] Postgres 28/28  ✅
+Done:   [████████████████████] Mongo    28/28  ✅
+Todo:   [░░░░░░░░░░░░░░░░░░░░] MySQL    0/28  ⬜  ← NEXT
+```
+
+### What to do — in order (see §6 for rationale)
+
+#### Step A — MongoDB adapter  →  `src/polydb/adapters/mongo.py`  (build order §6 step 4) ✅ **Done**
+
+Shipped 2026-09-05: `motor` client, `maxPoolSize`/`serverSelectionTimeoutMS`, full DSL via `mongo_compiler.py`, native aggregation, `ClientSession` transactions (replica set → `TransactionsUnavailableError` on standalone), schemaless `create_collection`/`add_field` no-ops, deterministic index names, `raw` dict command / `explain` via `find().explain()`.
+
+Checklist that landed:
+
+1. ✅ `connect()` / `disconnect()` / `ping()` / `__aenter__/__aexit__` — `motor.AsyncIOMotorClient` via `url_parser.ConnectionConfig`; `tests/contract/test_connection.py` passes with `mongodb://` mocked.
+2. ✅ `compilers/mongo_compiler.py` wired — `$like` → `$expr`/`$regexMatch`, `$not` → `$nor`.
+3. ✅ Create: `insert_one` / `insert_many` / `upsert_one` (#7–#9) — `upsert_one` find-then-update-by-`_id`-or-insert (filter merges, doc wins).
+4. ✅ Read: `find_one` / `find` / `count` / `exists` / `aggregate` (#10–#14) — `aggregate` native.
+5. ✅ Update/Delete: `update_one` / `update_many` / `replace_one` / `delete_one` / `delete_many` (#15–#19) — `MongoCompiler.compile_update` validates `$push` native.
+6. ✅ Schema: `create_collection` / `drop_collection` / `list_collections` / `create_index` / `add_field` (#20–#24) — schema ignored + `logger.info`, `add_field` warning.
+7. ✅ Transactions: `transaction()` + `commit()`/`rollback()` (#25–#26) — `ClientSession` + `start_transaction` / `commit_transaction` / `abort_transaction` / `end_session`.
+8. ✅ Escape hatch: `raw()` / `explain()` (#27–#28) — `raw` dict via `db.command`, `explain` via `find().explain()`.
+9. ✅ Contract suite: `tests/contract/test_connection.py` updated; `docs/supported_operations_matrix.md` + `README.md` reflect Mongo live.
+
+#### Step B — MySQL leg of the SQL family  →  `src/polydb/adapters/sql/mysql_driver.py` + `src/polydb/adapters/sql/dialects.py` (build order §6 step 5) ← **do this next**
+
+MySQL is the lowest-risk step once Mongo is done: the compiler and dialect-switching are already proven by SQLite+Postgres.
+
+**Checklist:**
+
+1. Add `MysqlDialect` (placeholder `%s`, backtick quoting, `REGEXP` native) and `asyncmy` driver wiring in `mysql_driver.py` — mirror `sqlite_driver.py` structure, not `postgres.py`.
+2. Adapt SQLite-specific `rowid`/`ctid` single-row targeting to a PK-based path (MySQL has no `rowid`).
+3. Replace `PRAGMA table_info` introspection in `replace_one`/`_table_layout` with `information_schema` (same as Postgres leg already does).
+4. Wire `pool_size` → `asyncmy` pool `max_size` (remove the SQLite "accepted but ignored" warning path for this dialect).
+5. `upsert_one`: swap `ON CONFLICT` → `ON DUPLICATE KEY UPDATE` semantics inside the MySQL dialect branch.
+6. Contract suite now runs 4-way: `postgres / mongo / sqlite / mysql` — no new tests, just new dialect wiring. Green is the gate.
+
+#### Step C — Hardening & release
+
+- Harden `tests/contract/` + `tests/unit/` to exercise all 4 backends; add `hypothesis` filter-compiler fuzz (§7.5) asserting SQLite≈Postgres≈MySQL row-set parity.
+- Update `docs/supported_operations_matrix.md` + `README.md` (Current status table + Connecting table) + `examples/*.py`.
+- Bump `version` in `pyproject.toml`, merge `development` → `master` to publish (see `README.md` Branching & releases).
+
+### How to verify you're done (definition of done)
+
+```bash
+pip install -e ".[dev,all]"          # all four drivers (asyncpg, motor, aiosqlite, asyncmy)
+PYTHONPATH=src pytest                 # unit + contract (needs PG/Mongo/MySQL — testcontainers or local)
+PYTHONPATH=src pytest tests/unit/test_sql_compiler.py tests/unit/test_mongo_compiler.py -v
+```
+
+Contract gate: every `tests/contract/test_*.py` passes parametrized over `[postgres, mongo, sql_sqlite, sql_mysql]`. Support-matrix enforcement test (§7.4) ensures `docs/supported_operations_matrix.yaml` never drifts from `UnsupportedOperationError` behavior.
+
+### If you only have 30 minutes
+
+Do **Step B item 1** (MySQL `MysqlDialect` + `asyncmy` wiring): it unblocks every other MySQL item and proves `Database.from_url("mysql://…")` → `connect()` → `ping()` end-to-end. Next 30 min: item 2 (rowid→PK targeting), then item 3 (`information_schema` introspection).
+
+---
+
 ## 1. Feature List
 
 Support legend: ✅ Full · 🟡 Partial (works, with a caveat noted) · ❌ Not supported (raises
 `UnsupportedOperationError`)
 
-Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — update this column as work
-lands; it tracks **implementation progress**, separate from the support-level columns above
-which describe **design intent**. As of this revision: issue #1 (`from_url`), #2
-(`connect`), #3 (`disconnect`), #4 (`ping`), #5 (`async with` context manager), #6
-(`pool_size`/`timeout` knobs), #7 (`insert_one`), #8 (`insert_many`), #9 (`upsert_one`),
-#10–#14 (the full §1.3 Read surface: `find_one`, `find`, `count`, `exists`,
-`aggregate`, backed by the shared `sql_compiler.py` filter translator), #15–#17 (the
-full §1.4 Update surface: `update_one`, `update_many`, `replace_one`, backed by the new
-`compile_update_set` §2.4 update-operator translator), #18–#19 (the full §1.5 Delete
-surface: `delete_one`, `delete_many`), #20–#24 (all of §1.6 Schema/structure:
-`create_collection`, `drop_collection`, `list_collections`, `create_index`,
-`add_field`), #25–#26 (the full §1.7 Transactions surface:
-`transaction()` + `Transaction.commit()`/`rollback()`), and #27–#28 (the full §1.8
-escape-hatch surface: `raw`, `explain`) are done for the **SQLite leg and the Postgres
-leg** (the two live connections; `postgres://` now opens an `asyncpg` pool with the
-Postgres dialect — `"` quoting, `~` for `$regex`, numbered `$1` placeholders via
-`number_placeholders()`, `GROUP BY ()`, `ctid` for single-row targeting). Everything
-else (Mongo, MySQL) is not started. The §2 DSL also has its Mongo-side leg now:
-`compilers/mongo_compiler.py` validates the shared grammar and normalizes
-`$like`/`$not` for Mongo (unit-tested in isolation; adapter wiring itself is
-still pending).
+Build-status legend: ⬜ Not started · 🔨 In progress · ✅ Done — the **Status** column tracks **implementation progress** (has it been coded?), separate from the Postgres/Mongo/SQL-family columns which describe **design intent** (is it supposed to work on that backend?).
 
-**Progress summary: 28 / 28 features implemented (100%) on SQLite + Postgres.**
+**Progress summary (2026-09-05):**
+
+| Backend | Adapter file | Driver | Features #1–#28 | DSL compilers |
+|---------|--------------|--------|-----------------|---------------|
+| SQLite (SQL family) | `adapters/sql/base.py` (dialect `sqlite`) | `aiosqlite` | **28/28 ✅ Done** — `postgres://` dialect details not applicable | `sql_compiler.py` ✅ |
+| Postgres | `adapters/postgres.py` | `asyncpg` (pool, `$1`, `"` quoting, `~` for `$regex`, `GROUP BY ()`, `ctid`) | **28/28 ✅ Done** | same `sql_compiler.py` ✅ |
+| Mongo | `adapters/mongo.py` | `motor` | **28/28 ✅ Done** — `motor` client, `maxPoolSize`/`serverSelectionTimeoutMS`, native aggregation, `ClientSession` tx | `mongo_compiler.py` ✅ |
+| MySQL (SQL family) | `adapters/sql/mysql_driver.py` | `asyncmy` | **0/28 ⬜ Todo** — stub, `connect()` raises `NotImplementedError` | `sql_compiler.py` (needs `MysqlDialect`) |
+
+> **Reading the tables below:** every row shows `✅ Done` in *Status* because the **SQLite + Postgres + Mongo** legs are done. The per-backend columns show *design intent* (whether that feature will be ✅/🟡/❌ on that backend once implemented). For remaining work see "What to do next" at the top — **Step B = MySQL next**.
 
 ### 1.1 Connection management
 
@@ -433,7 +493,7 @@ polydb/
 │           └── mongo_compiler.py        # filter/update dict -> Mongo query dict ($like normalizer etc.)
 ├── tests/
 │   ├── conftest.py                     # spins up ephemeral Postgres/Mongo/MySQL via testcontainers
-│   ├── contract/                       # ONE shared suite, parametrized over all 3 adapters
+│   ├── contract/                       # ONE shared suite, parametrized over all 4 adapters
 │   │   ├── test_connection.py
 │   │   ├── test_create.py
 │   │   ├── test_read.py
@@ -467,48 +527,23 @@ polydb/
 
 **Order: SQLite (inside the SQL family adapter) → PostgreSQL → MongoDB → SQL family's MySQL leg.**
 
-1. **`BaseAdapter` ABC + `Database` façade + `url_parser.py` + exception hierarchy first,
-   with zero backends.** This is the contract everything else is graded against. Getting
-   the method signatures and result types locked here means no adapter has to be reshaped
-   later — reshaping after two adapters exist is expensive; reshaping before any exist is
-   free.
+| Step | What | Status | Notes |
+|------|------|--------|-------|
+| 1 | `BaseAdapter` ABC + `Database` façade + `url_parser.py` + exception hierarchy | ✅ Done | Contract locked before any adapter; no reshaping needed after step 2+. |
+| 2 | SQL family adapter, **SQLite leg** (`aiosqlite`) | ✅ Done | Forced `sql_compiler.py` to exist early; hardest reusable piece; 28/28 features passing. |
+| 3 | **PostgreSQL adapter** (reuse `sql_compiler.py`, Postgres dialect) | ✅ Done | Validated dialect-agnostic compiler: `~` for `$regex`, `$1` via `number_placeholders()`, `"` quoting, `GROUP BY ()`, `ctid`. Reference ACID impl alongside SQLite. |
+| 4 | **MongoDB adapter** (`motor`, schemaless) | ✅ Done (2026-09-05) | See "What to do next" Step A (shipped). Odd-one-out (replica-set tx, `$push` native) so deliberately after the relational contract is proven. |
+| 5 | **MySQL leg** of the SQL family (`asyncmy`, `%s` placeholders) | ⬜ **Next — do this now** | Lowest-risk step now Mongo is done: third dialect config + `information_schema` introspection + `ON DUPLICATE KEY UPDATE`. See Step B checklist. |
+| 6 | Shared contract suite hardening + docs + examples | 🔨 Continuous | Runs alongside steps 2–5 (§7). Gate is 4-way parametrization: `postgres / mongo / sqlite / mysql`. |
 
-2. **SQL family adapter, SQLite leg, using `aiosqlite`.** SQLite is the simplest possible
-   relational target: no network, no server process, no auth, trivial CI setup (just a temp
-   file), and it forces the `sql_compiler.py` filter-translation logic to exist early since
-   it's the hardest, most reusable piece of the whole library (both MySQL and Postgres will
-   reuse >80% of it). Building the compiler against SQLite first means the compiler is
-   proven correct before it has to also juggle Postgres's `$N` placeholders or MySQL's
-   `%s` placeholders — one variable at a time.
+<details><summary>Rationale for the order (why this sequence, not another)</summary>
 
-3. **PostgreSQL adapter, reusing `sql_compiler.py` with a Postgres dialect
-   (numbered `$1` placeholders via `number_placeholders()`, `"` quoting, `~` for
-   `$regex`, `GROUP BY ()` for global groups, `OFFSET` without `LIMIT -1`,
-   `ctid` for single-row targeting, `asyncpg` pool).** ✅ Done. Postgres came second
-   because it validated that the compiler built in step 2 is genuinely dialect-agnostic —
-   the only touches to core compiler logic were dialect-switched (`~` for `$regex`,
-   `_compile_limit_offset` using `self._ph`, `GROUP BY ()`, new `PostgresDialect`)
-   rather than a reshape. Postgres also has the richest ACID/transaction semantics, so it
-   is the reference implementation for `transaction()` alongside SQLite.
-
-4. **MongoDB adapter.** Deliberately last among the "real" backends because Mongo is the
-   *odd one out* — schemaless, no relational JOIN concept, transactions require a replica
-   set. Building it last means the shared contract test suite (step 5) is already mature
-   and battle-tested against two relational-shaped backends, so when Mongo inevitably can't
-   satisfy some assumption (multi-doc transactions on standalone servers, `$push` array
-   updates with no SQL equivalent), the plan can cleanly mark that operation `🟡`/`❌`
-   instead of quietly redesigning the whole contract around Mongo's constraints.
-
-5. **MySQL leg of the SQL family adapter, via `asyncmy`.** Saved for last because it's the
-   lowest-risk, highest-confidence step once SQLite has proven the compiler and Postgres has
-   proven the dialect-swapping mechanism — MySQL is "just" a third dialect config
-   (`%s` placeholders, `ON DUPLICATE KEY UPDATE` instead of `ON CONFLICT`, no native
-   `REGEXP` quirks to work around since MySQL has `REGEXP` built in). Doing it last also
-   means the contract suite runs against it with zero new test-writing, only new
-   dialect wiring — the cheapest possible increment.
-
-6. **Shared contract test suite hardening + docs + examples**, running continuously
-   alongside steps 2–5 rather than only at the end (see §7).
+1. **Step 1 — Contract first, zero backends.** Getting method signatures and result types locked means no adapter has to be reshaped later — reshaping after two adapters exist is expensive; reshaping before any exist is free.
+2. **Step 2 — SQLite first.** Simplest relational target: no network/server/auth, trivial CI (temp file), forces the compiler to exist early since both MySQL and Postgres will reuse >80% of it. Proves the compiler correct before juggling Postgres's `$N` vs MySQL's `%s` — one variable at a time.
+3. **Step 3 — Postgres second.** Validates the compiler is genuinely dialect-agnostic (only dialect-switched touches, no reshape) and gives the richest ACID reference for `transaction()` alongside SQLite.
+4. **Step 4 — Mongo last among "real" backends.** *Odd one out* — schemaless, no JOIN, transactions require replica set. Building it after a mature contract suite lets `🟡`/`❌` marks stay honest instead of redesigning the contract around Mongo's constraints.
+5. **Step 5 — MySQL last.** Cheapest increment: just dialect wiring, zero new tests, once steps 2–3 have proven the mechanism.
+</details>
 
 ---
 
@@ -579,10 +614,9 @@ returns the same row set for a fixed seeded dataset.
 
 ## 8. Open Questions
 
-1. ~~**Package name**~~ — **Resolved: `polydb`.** (Still worth confirming exact PyPI
-   availability with `pip install polydb` or the PyPI project page before publishing.)
+1. ~~**Package name**~~ — **Resolved: Python import `polydb`, PyPI distribution `genius74o-polydb`** (`polydb` is squatted). See `pyproject.toml` + `README.md`. ✅
 2. **Sync support** — async-first is specified; is a sync wrapper (e.g. via
-   `asyncio.run` shims, à la `httpx`'s sync client) in scope for v1, or strictly async-only?
+   `asyncio.run` shims, à la `httpx`'s sync client) in scope for v1, or strictly async-only? *(deferred — v1 is async-only, revisit after MySQL leg)*
 3. **Transaction scope** — is cross-collection/cross-table transaction support required, or
    is single-collection-at-a-time transactional safety sufficient for v1? This affects
    whether `Transaction` needs to hold multiple cursors/sessions simultaneously.
@@ -610,8 +644,8 @@ returns the same row set for a fixed seeded dataset.
     window functions) are safe to rely on internally.
 11. **Observability** — do you want structured logging / OpenTelemetry spans around each
     adapter call baked into v1, or added later as a separate concern?
-12. **License** — MIT/Apache-2.0/other?
+12. ~~**License**~~ — **Resolved: MIT** (`LICENSE` file, `pyproject.toml` `license`). ✅
 
 ---
 
-*End of planning document. No implementation code has been written. Awaiting go-ahead.*
+*End of planning document v2 — see "What to do next" at the top for the current action list. SQLite + Postgres + Mongo legs shipped (28/28 each); MySQL is the next build step.*

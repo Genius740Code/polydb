@@ -96,10 +96,56 @@ async def test_postgres_adapter_resolves_and_pool_knobs_wired(monkeypatch):
     assert db._adapter._connected is False
 
 
-async def test_mongo_connect_not_implemented_yet():
-    db = Database.from_url("mongodb://localhost:27017/db")
-    with pytest.raises(NotImplementedError):
-        await db.connect()
+async def test_mongo_adapter_resolves_and_pool_knobs_wired(monkeypatch):
+    # Mongo build step 4 is done — from_url resolves and connect wires pool_size/timeout
+    # into motor.AsyncIOMotorClient (mocked here so no real server is needed).
+    import motor.motor_asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, uri, **kwargs):
+            captured["uri"] = uri
+            captured.update(kwargs)
+            self._uri = uri
+            # minimal db mock
+            self._dbs: dict = {}
+
+        def __getitem__(self, name):
+            if name not in self._dbs:
+                mock_db = MagicMock()
+                mock_db.command = AsyncMock(return_value={"ok": 1})
+                self._dbs[name] = mock_db
+            return self._dbs[name]
+
+        @property
+        def admin(self):
+            m = MagicMock()
+            m.command = AsyncMock(return_value={"ok": 1})
+            return m
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(motor.motor_asyncio, "AsyncIOMotorClient", FakeClient)
+
+    db = Database.from_url("mongodb://user:pass@localhost:27017/mydb?pool_size=3&timeout=2.5")
+    assert isinstance(db._adapter, MongoAdapter)
+    assert db.pool_size == 3
+    assert db.timeout == 2.5
+    await db.connect()
+    # URI passed to motor should have polydb params stripped
+    assert "pool_size" not in captured["uri"]
+    assert "timeout" not in captured["uri"]
+    assert captured["maxPoolSize"] == 3
+    assert captured["serverSelectionTimeoutMS"] == 2500
+    assert db._adapter._connected is True
+    assert db._adapter._database_name == "mydb"
+    # ping uses admin.command on the fake client
+    assert await db.ping() is True
+    await db.disconnect()
+    assert db._adapter._connected is False
 
 
 async def test_mysql_connect_not_implemented_yet():
